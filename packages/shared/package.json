@@ -1,0 +1,13 @@
+{
+  "name": "@vine/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./app": "./src/app.js",
+    "./auth": "./src/auth.js",
+    "./db": "./src/db.js",
+    "./errors": "./src/errors.js",
+    "./validation": "./src/validation.js"
+  }
+}
