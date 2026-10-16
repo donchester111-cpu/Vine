@@ -1,0 +1,96 @@
+# Blueprint for manual staging deployment. This file alone does not create services.
+# Do not provision until all four SQL migrations have been applied and every required secret is set.
+services:
+  - type: web
+    name: vine-accounts-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:accounts
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SUPABASE_URL
+        value: https://jktuwbgocpixtelfxzwq.supabase.co
+      - key: AUTH_SUPABASE_ANON_KEY
+        sync: false
+      - key: ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  - type: web
+    name: vine-store-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:store
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SUPABASE_URL
+        value: https://jktuwbgocpixtelfxzwq.supabase.co
+      - key: AUTH_SUPABASE_ANON_KEY
+        sync: false
+      - key: ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PRODUCTS_SUPABASE_URL
+        value: https://xiehbdaaioifjcbnvpqf.supabase.co
+      - key: PRODUCTS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ORDERS_SUPABASE_URL
+        value: https://ybwdecxsbveiobfvwkvr.supabase.co
+      - key: ORDERS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: CHECKOUT_ENABLED
+        value: "false"
+      - key: DELIVERY_FEE_KOBO
+        value: "0"
+
+  - type: web
+    name: vine-operations-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:operations
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SUPABASE_URL
+        value: https://jktuwbgocpixtelfxzwq.supabase.co
+      - key: AUTH_SUPABASE_ANON_KEY
+        sync: false
+      - key: ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PRODUCTS_SUPABASE_URL
+        value: https://xiehbdaaioifjcbnvpqf.supabase.co
+      - key: PRODUCTS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ORDERS_SUPABASE_URL
+        value: https://ybwdecxsbveiobfvwkvr.supabase.co
+      - key: ORDERS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPERATIONS_SUPABASE_URL
+        value: https://sqtntfnbjtguqddvvsly.supabase.co
+      - key: OPERATIONS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_CALLBACK_URL
+        sync: false
+      - key: BANK_TRANSFER_BANK_NAME
+        sync: false
+      - key: BANK_TRANSFER_ACCOUNT_NAME
+        sync: false
+      - key: BANK_TRANSFER_ACCOUNT_NUMBER
+        sync: false
