@@ -3,7 +3,8 @@ import express from 'express';
 import { z } from 'zod';
 import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
 import { createAuthContext, createSupabaseClient } from '@vine/shared/db';
-import { requireAuth, requireRoles } from '@vine/shared/auth';
+import { requireAuth } from '@vine/shared/auth';
+import { requirePermission } from '@vine/shared/rbac';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { clampInt, emailSchema, normalizeProductQuery, optionalText, phoneSchema, safeText, uuidSchema } from '@vine/shared/validation';
 
@@ -16,8 +17,10 @@ const app = express();
 applySecurity(app, { requestLimit: 180 });
 app.use(express.json({ limit: '128kb' }));
 const auth = requireAuth(authClient);
-const catalogAdmin = requireRoles(accountsAdmin, ['owner', 'admin', 'catalog']);
-const operationsAdmin = requireRoles(accountsAdmin, ['owner', 'admin', 'operations', 'support']);
+const catalogAdmin = requirePermission(accountsAdmin, 'products.manage', ['owner', 'admin', 'catalog']);
+const supplierView = requirePermission(accountsAdmin, 'suppliers.view', ['owner', 'admin', 'catalog']);
+const supplierManage = requirePermission(accountsAdmin, 'suppliers.manage', ['owner', 'admin', 'catalog']);
+const operationsAdmin = requirePermission(accountsAdmin, 'orders.view', ['owner', 'admin', 'operations', 'support']);
 const publicProductFields = 'id,category_id,sku,slug,name,description,price_kobo,compare_at_price_kobo,currency,image_url,gallery_urls,tag,rating,review_count,stock_quantity,reserved_quantity,status,created_at,updated_at,category:categories(id,name,slug)';
 
 function toPublicProduct(row) {
@@ -138,12 +141,12 @@ app.patch('/api/v1/admin/products/:id', auth, catalogAdmin, asyncRoute(async (re
   res.json({ data: toPublicProduct(data) });
 }));
 
-app.get('/api/v1/admin/suppliers', auth, catalogAdmin, asyncRoute(async (req, res) => {
+app.get('/api/v1/admin/suppliers', auth, supplierView, asyncRoute(async (req, res) => {
   const { data, error } = await productsDb.from('suppliers').select('id,name,contact_name,contact_email,contact_phone,shipping_method,internal_notes,status,created_at,updated_at').order('name');
   if (error) throw new HttpError(503, 'SUPPLIERS_UNAVAILABLE', 'Supplier records could not be loaded.');
   res.json({ data: data || [] });
 }));
-app.post('/api/v1/admin/suppliers', auth, catalogAdmin, asyncRoute(async (req, res) => {
+app.post('/api/v1/admin/suppliers', auth, supplierManage, asyncRoute(async (req, res) => {
   const input = z.object({ name: safeText(160), contactName: optionalText(160), contactEmail: z.string().email().max(254).optional().or(z.literal('')), contactPhone: optionalText(40), shippingMethod: optionalText(160), internalNotes: optionalText(3000), status: z.enum(['active','paused','retired']).default('active') }).parse(req.body);
   const { data, error } = await productsDb.from('suppliers').insert({ name: input.name, contact_name: input.contactName || null, contact_email: input.contactEmail || null, contact_phone: input.contactPhone || null, shipping_method: input.shippingMethod || null, internal_notes: input.internalNotes || null, status: input.status }).select('id,name,contact_name,contact_email,contact_phone,shipping_method,internal_notes,status,created_at,updated_at').single();
   if (error) throw new HttpError(400, 'SUPPLIER_CREATE_FAILED', 'Supplier could not be created.');
@@ -151,7 +154,7 @@ app.post('/api/v1/admin/suppliers', auth, catalogAdmin, asyncRoute(async (req, r
   console.log(JSON.stringify({ level: 'info', service: process.env.SERVICE_NAME, action: 'supplier.created', supplierId: data.id }));
   res.status(201).json({ data });
 }));
-app.patch('/api/v1/admin/suppliers/:id', auth, catalogAdmin, asyncRoute(async (req, res) => {
+app.patch('/api/v1/admin/suppliers/:id', auth, supplierManage, asyncRoute(async (req, res) => {
   const id = uuidSchema.parse(req.params.id);
   const input = z.object({ name: safeText(160).optional(), contactName: optionalText(160), contactEmail: z.string().email().max(254).optional().or(z.literal('')), contactPhone: optionalText(40), shippingMethod: optionalText(160), internalNotes: optionalText(3000), status: z.enum(['active','paused','retired']).optional() }).refine(v => Object.keys(v).length > 0, 'Provide at least one field.').parse(req.body);
   const map = { name:'name', contactName:'contact_name', contactEmail:'contact_email', contactPhone:'contact_phone', shippingMethod:'shipping_method', internalNotes:'internal_notes', status:'status' };
@@ -162,12 +165,12 @@ app.patch('/api/v1/admin/suppliers/:id', auth, catalogAdmin, asyncRoute(async (r
   if (!data) throw new HttpError(404, 'SUPPLIER_NOT_FOUND', 'Supplier was not found.');
   res.json({ data });
 }));
-app.get('/api/v1/admin/supplier-products', auth, catalogAdmin, asyncRoute(async (_req, res) => {
+app.get('/api/v1/admin/supplier-products', auth, supplierView, asyncRoute(async (_req, res) => {
   const { data, error } = await productsDb.from('supplier_products').select('id,supplier_id,product_id,supplier_sku,cost_price_kobo,lead_time_days,supplier_url,is_primary,created_at,suppliers(name),products(name,sku)').order('created_at', { ascending: false });
   if (error) throw new HttpError(503, 'SUPPLIER_PRODUCTS_UNAVAILABLE', 'Supplier product mappings could not be loaded.');
   res.json({ data: (data || []).map(row => ({ ...row, cost_price_ngn: Number(row.cost_price_kobo) / 100, cost_price_kobo: Number(row.cost_price_kobo) })) });
 }));
-app.post('/api/v1/admin/supplier-products', auth, catalogAdmin, asyncRoute(async (req, res) => {
+app.post('/api/v1/admin/supplier-products', auth, supplierManage, asyncRoute(async (req, res) => {
   const input = z.object({ supplierId: uuidSchema, productId: uuidSchema, supplierSku: optionalText(120), costPriceNgn: z.number().finite().min(0).max(100000000), leadTimeDays: z.number().int().min(0).max(365).optional(), supplierUrl: z.string().url().refine(value => { try { return new URL(value).protocol === 'https:'; } catch { return false; } }, 'Supplier URL must use HTTPS.').optional().or(z.literal('')), isPrimary: z.boolean().default(false) }).parse(req.body);
   if (input.isPrimary) {
     const { error: clearError } = await productsDb.from('supplier_products').update({ is_primary: false }).eq('product_id', input.productId).eq('is_primary', true);
