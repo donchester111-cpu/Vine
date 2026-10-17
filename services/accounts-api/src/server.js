@@ -45,8 +45,29 @@ app.post('/api/v1/auth/signup', authLimiter, asyncRoute(async (req, res) => {
   res.status(201).json({ data: { user: data.user ? { id: data.user.id, email: data.user.email } : null, session: data.session ? { accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: data.session.expires_at } : null, emailConfirmationRequired: !data.session } });
 }));
 
+function timingSafeStringEqual(left, right) {
+  const a = Buffer.from(String(left), 'utf8');
+  const b = Buffer.from(String(right), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 app.post('/api/v1/auth/login', authLimiter, asyncRoute(async (req, res) => {
   const input = z.object({ email: emailSchema, password: z.string().min(1).max(128) }).parse(req.body);
+  const ownerEmail = String(process.env.VINE_OWNER_EMAIL || 'donchester111@gmail.com').trim().toLowerCase();
+  const submittedEmail = input.email.trim().toLowerCase();
+
+  // The owner password is an additional server-side gate. Continue through Supabase
+  // Auth after it passes so the client still receives a real, verifiable Supabase session.
+  if (submittedEmail === ownerEmail) {
+    const ownerPassword = process.env.OWNER_PASSWORD;
+    if (!ownerPassword) {
+      throw new HttpError(503, 'OWNER_LOGIN_NOT_CONFIGURED', 'Owner sign-in is not configured on the server.');
+    }
+    if (!timingSafeStringEqual(input.password, ownerPassword)) {
+      throw new HttpError(401, 'LOGIN_FAILED', 'Owner email or password is incorrect.');
+    }
+  }
+
   const { data, error } = await authClient.auth.signInWithPassword({ email: input.email, password: input.password });
   if (error || !data?.session || !data.user) throw new HttpError(401, 'LOGIN_FAILED', 'Email or password is incorrect, or the account needs email verification.');
   res.json({ data: { user: { id: data.user.id, email: data.user.email }, session: { accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: data.session.expires_at } } });
