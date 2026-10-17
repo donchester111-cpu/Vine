@@ -7,6 +7,7 @@ import { createAuthContext } from '@vine/shared/db';
 import { requireAuth } from '@vine/shared/auth';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { emailSchema, optionalText, phoneSchema, safeText, uuidSchema } from '@vine/shared/validation';
+import { registerOwnerAdmin } from './owner-admin.js';
 
 process.env.SERVICE_NAME = 'vine-accounts-api';
 const { authClient, accountsAdmin } = createAuthContext();
@@ -139,6 +140,8 @@ app.delete('/api/v1/me/addresses/:id', auth, asyncRoute(async (req, res) => {
   if (!data) throw new HttpError(404, 'ADDRESS_NOT_FOUND', 'That address was not found.');
   res.status(204).end();
 }));
+
+registerOwnerAdmin(app, { accountsAdmin, auth });
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);
