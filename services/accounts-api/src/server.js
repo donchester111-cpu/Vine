@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
 import { createAuthContext } from '@vine/shared/db';
-import { requireAuth } from '@vine/shared/auth';
+import { createOwnerSessionToken, requireAuth } from '@vine/shared/auth';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { emailSchema, optionalText, phoneSchema, safeText, uuidSchema } from '@vine/shared/validation';
 import { registerOwnerAdmin } from './owner-admin.js';
@@ -13,6 +13,7 @@ process.env.SERVICE_NAME = 'vine-accounts-api';
 const { authClient, accountsAdmin } = createAuthContext();
 if (!accountsAdmin) throw new Error('ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY is required for vine-accounts-api.');
 const app = express();
+app.set('trust proxy', 1);
 applySecurity(app, { requestLimit: 120 });
 app.use(express.json({ limit: '64kb' }));
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false });
@@ -56,18 +57,29 @@ app.post('/api/v1/auth/login', authLimiter, asyncRoute(async (req, res) => {
   const ownerEmail = String(process.env.VINE_OWNER_EMAIL || 'donchester111@gmail.com').trim().toLowerCase();
   const submittedEmail = input.email.trim().toLowerCase();
 
-  // The owner password is an additional server-side gate. Continue through Supabase
-  // Auth after it passes so the client still receives a real, verifiable Supabase session.
-  if (submittedEmail === ownerEmail) {
-    const ownerPassword = process.env.OWNER_PASSWORD;
-    if (!ownerPassword) {
-      throw new HttpError(503, 'OWNER_LOGIN_NOT_CONFIGURED', 'Owner sign-in is not configured on the server.');
+    // Owner login is entirely server-authenticated. It never calls Supabase Auth sign-in,
+    // magic-link generation, OTP verification, or token refresh.
+    if (submittedEmail === ownerEmail) {
+      const ownerPassword = process.env.OWNER_PASSWORD;
+      const ownerUserId = String(process.env.VINE_OWNER_USER_ID || '').trim();
+      if (!ownerPassword) {
+        throw new HttpError(503, 'OWNER_LOGIN_NOT_CONFIGURED', 'Owner sign-in is not configured on the server.');
+      }
+      if (!ownerUserId) {
+        throw new HttpError(503, 'OWNER_ID_NOT_CONFIGURED', 'The owner identity is not configured on the server.');
+      }
+      if (!timingSafeStringEqual(input.password, ownerPassword)) {
+        throw new HttpError(401, 'LOGIN_FAILED', 'Owner email or password is incorrect.');
+      }
+      const localSession = createOwnerSessionToken({ id: ownerUserId, email: ownerEmail });
+      res.json({ data: {
+        user: { id: ownerUserId, email: ownerEmail },
+        session: { accessToken: localSession.accessToken, refreshToken: null, expiresAt: localSession.expiresAt, tokenType: 'Bearer', authType: 'server-owner' }
+      } });
+      return;
     }
-    if (!timingSafeStringEqual(input.password, ownerPassword)) {
-      throw new HttpError(401, 'LOGIN_FAILED', 'Owner email or password is incorrect.');
-    }
-  }
 
+  // Regular customer login remains ordinary Supabase email/password authentication.
   const { data, error } = await authClient.auth.signInWithPassword({ email: input.email, password: input.password });
   if (error || !data?.session || !data.user) throw new HttpError(401, 'LOGIN_FAILED', 'Email or password is incorrect, or the account needs email verification.');
   res.json({ data: { user: { id: data.user.id, email: data.user.email }, session: { accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: data.session.expires_at } } });
@@ -81,8 +93,10 @@ app.post('/api/v1/auth/refresh', authLimiter, asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/v1/auth/logout', auth, asyncRoute(async (req, res) => {
-  // Revoke the current Supabase session where supported; the browser must also erase its local tokens.
-  try { await accountsAdmin.auth.admin.signOut(req.accessToken, 'local'); } catch { /* token removal on the client remains mandatory */ }
+  // Supabase customer sessions may be revoked server-side. Owner sessions are stateless and expire after two hours; the owner page discards its in-memory token on sign-out.
+  if (req.authType !== 'owner-server') {
+    try { await accountsAdmin.auth.admin.signOut(req.accessToken, 'local'); } catch { /* client token removal remains mandatory */ }
+  }
   res.status(204).end();
 }));
 

@@ -5,6 +5,15 @@ import { resolveStaffAccess } from '@vine/shared/rbac';
 export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
   const ownerOnly = async (req, _res, next) => {
     try {
+      if (req.authType === 'owner-server') {
+        const configuredEmail = String(process.env.VINE_OWNER_EMAIL || 'donchester111@gmail.com').trim().toLowerCase();
+        const configuredId = String(process.env.VINE_OWNER_USER_ID || '').trim().toLowerCase();
+        if (String(req.user?.email || '').trim().toLowerCase() !== configuredEmail || String(req.user?.id || '').toLowerCase() !== configuredId || !configuredId) {
+          throw new HttpError(403, 'OWNER_REQUIRED', 'Only the configured Vine owner can use this control centre.');
+        }
+        req.staffAccess = { userId: req.user.id, email: req.user.email, fullName: 'Vine Owner', role: 'Owner', status: 'active', isOwner: true, permissions: ['*'], source: 'server' };
+        return next();
+      }
       const access = await resolveStaffAccess(accountsAdmin, req.user);
       if (!access.isOwner) throw new HttpError(403, 'OWNER_REQUIRED', 'Only the configured Vine owner can use this control centre.');
       req.staffAccess = access;
