@@ -2,7 +2,7 @@
 
 This is the first backend implementation for **Vine, an online retail store**. Vine owns the customer relationship, order, payment, supplier coordination, and delivery experience. There is no public seller registration or independent seller storefront.
 
-**This package has not been deployed.** It contains server code and SQL migrations only. The SQL files must be applied manually to the correct Supabase project. The Render blueprint is only a configuration file; do not provision it until the setup checklist below is complete.
+**This package has not been deployed.** The backend source and migrations require deployment to the existing Render services, and the matching static pages are in the sibling `site/` folder in the integrated ZIP. Apply SQL only to the matching Supabase project, and do not run deployment steps until the checklist is complete.
 
 ## Architecture
 
@@ -130,6 +130,6 @@ Keep test credentials and real payment credentials separate. Test with Paystack 
 
 **Included in this first backend package:** three service entry points; separate per-project SQL; Supabase Auth integration; self-owned profiles/addresses; product/category APIs; supplier and wholesale-cost tables and staff APIs; customer checkout/order history/cancellation; stock reserve/release/commit functions; Paystack initialize/verify-webhook flow; manual transfer verification endpoint; delivery status transitions; audit trail; paid-sales analytics; a notification-job queue; one-file storefront integration.
 
-**Still required before live business:** apply and inspect all four SQL migrations; configure Supabase Auth and RLS; create the owner account and add its role; deploy and health-check each service; set exact CORS origins; configure Paystack and webhook; set real supplier/product/stock data and delivery fees; implement an actual email/SMS delivery worker/provider; build a dedicated staff/admin dashboard; test refunds and late-payment/stock edge cases; review the final system with security and payment compliance requirements. Flutterwave is not yet wired to a live adapter in this initial version.
+**Still required before live business:** apply and inspect the account RBAC migration and prior migrations; configure Supabase Auth and RLS; bootstrap the owner; deploy and health-check each service; set exact CORS origins; configure Paystack and webhook; set real supplier/product/stock data and delivery fees; implement an actual email/SMS delivery worker/provider; complete the remaining owner settings APIs; test custom permissions with separate worker accounts and negative authorization cases; test refunds and late-payment/stock edge cases; review the final system with security and payment compliance requirements. Flutterwave is not yet wired to a live adapter in this initial version. These code changes are not a claim of a live deployment.
 
 The package is a working implementation foundation, not a claim that live ordering is operational yet. Checkout is explicitly disabled until those prerequisites are complete.
