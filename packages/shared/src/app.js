@@ -8,6 +8,8 @@ import { getAllowedOrigins } from './db.js';
 export function applySecurity(app, options = {}) {
   const allowedOrigins = options.allowedOrigins || getAllowedOrigins();
   app.disable('x-powered-by');
+  // Render terminates TLS in front of the app; trust its single proxy hop so IP-based rate limits work.
+  app.set('trust proxy', 1);
   app.use((req, res, next) => {
     req.id = req.headers['x-request-id']?.toString().slice(0, 100) || crypto.randomUUID();
     res.setHeader('X-Request-ID', req.id);
