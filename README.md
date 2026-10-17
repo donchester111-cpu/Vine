@@ -70,6 +70,9 @@ For Render, provide variables on each service individually:
 - `AUTH_SUPABASE_URL` — already set in `render.yaml` to `vine_accounts`.
 - `AUTH_SUPABASE_ANON_KEY` — the public/anon key from `vine_accounts`.
 - `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY` — private service-role/secret key from `vine_accounts`.
+- `VINE_OWNER_EMAIL` — the configured owner email (`donchester111@gmail.com`).
+- `OWNER_PASSWORD` — set privately in Render; it must match the owner's Supabase Auth password,
+  because the server still signs in through Supabase and returns a real Supabase session.
 - `ALLOWED_ORIGINS` — exact storefront origin(s), comma-separated; no wildcard in production.
 
 ### `vine-store-api`

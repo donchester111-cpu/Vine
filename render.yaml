@@ -18,6 +18,10 @@ services:
         sync: false
       - key: ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: VINE_OWNER_EMAIL
+        value: donchester111@gmail.com
+      - key: OWNER_PASSWORD
+        sync: false
       - key: ALLOWED_ORIGINS
         sync: false
 
