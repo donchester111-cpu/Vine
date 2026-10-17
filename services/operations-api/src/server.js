@@ -3,7 +3,8 @@ import express from 'express';
 import { z } from 'zod';
 import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
 import { createAuthContext, createSupabaseClient } from '@vine/shared/db';
-import { requireAuth, requireRoles } from '@vine/shared/auth';
+import { requireAuth } from '@vine/shared/auth';
+import { requirePermission } from '@vine/shared/rbac';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { clampInt, optionalText, safeText, uuidSchema } from '@vine/shared/validation';
 
@@ -16,9 +17,12 @@ const operationsDb = createSupabaseClient(process.env.OPERATIONS_SUPABASE_URL, p
 const app = express();
 applySecurity(app, { requestLimit: 180 });
 const auth = requireAuth(authClient);
-const paymentAdmin = requireRoles(accountsAdmin, ['owner', 'admin', 'operations']);
-const deliveryAdmin = requireRoles(accountsAdmin, ['owner', 'admin', 'operations', 'support']);
-const analyticsAdmin = requireRoles(accountsAdmin, ['owner', 'admin', 'operations']);
+const paymentAdmin = requirePermission(accountsAdmin, 'payments.manage', ['owner', 'admin', 'operations']);
+const deliveryView = requirePermission(accountsAdmin, 'deliveries.view', ['owner', 'admin', 'operations', 'support']);
+const deliveryAdmin = requirePermission(accountsAdmin, 'deliveries.manage', ['owner', 'admin', 'operations', 'support']);
+const analyticsAdmin = requirePermission(accountsAdmin, 'analytics.view', ['owner', 'admin', 'operations']);
+const notificationsView = requirePermission(accountsAdmin, 'notifications.view', ['owner', 'admin', 'operations', 'support']);
+const notificationsManage = requirePermission(accountsAdmin, 'notifications.manage', ['owner', 'admin', 'operations']);
 
 function safeProviderMessage(message) {
   return String(message || '').slice(0, 500).replace(/(sk_[a-zA-Z0-9]+|Bearer\s+\S+)/g, '[redacted]');
@@ -304,14 +308,14 @@ app.get('/api/v1/admin/analytics/daily-sales', auth, analyticsAdmin, asyncRoute(
   res.json({ data: { days, since, daily: rows, totals: { paidOrders: rows.reduce((n,r) => n + r.paid_orders,0), grossRevenueKobo: rows.reduce((n,r) => n + r.gross_revenue_kobo,0), grossRevenueNgn: rows.reduce((n,r) => n + r.gross_revenue_kobo,0) / 100 } } });
 }));
 
-app.get('/api/v1/admin/notifications', auth, requireRoles(accountsAdmin, ['owner','admin','operations','support']), asyncRoute(async (req, res) => {
+app.get('/api/v1/admin/notifications', auth, notificationsView, asyncRoute(async (req, res) => {
   const limit = clampInt(req.query.limit, 50, 1, 100);
   const { data, error } = await operationsDb.from('notification_jobs').select('id,order_id,channel,template_key,status,attempts,available_at,last_error_code,created_at,updated_at').order('created_at', { ascending: false }).limit(limit);
   if (error) throw new HttpError(503, 'NOTIFICATIONS_UNAVAILABLE', 'Notification jobs could not be loaded.');
   res.json({ data: data || [], note: 'Queue visibility is implemented; an email/SMS delivery provider and worker still need to be configured.' });
 }));
 
-app.post('/api/v1/admin/notifications/:id/requeue', auth, requireRoles(accountsAdmin, ['owner','admin','operations']), asyncRoute(async (req, res) => {
+app.post('/api/v1/admin/notifications/:id/requeue', auth, notificationsManage, asyncRoute(async (req, res) => {
   const id = uuidSchema.parse(req.params.id);
   const { data, error } = await operationsDb.from('notification_jobs').update({ status: 'pending', attempts: 0, available_at: new Date().toISOString(), last_error_code: null, updated_at: new Date().toISOString() }).eq('id', id).in('status',['failed','cancelled']).select('id,status,available_at').maybeSingle();
   if (error) throw new HttpError(503, 'NOTIFICATION_REQUEUE_FAILED', 'The notification could not be requeued.');
