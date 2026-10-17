@@ -56,9 +56,8 @@ app.post('/api/v1/auth/login', authLimiter, asyncRoute(async (req, res) => {
   const ownerEmail = String(process.env.VINE_OWNER_EMAIL || 'donchester111@gmail.com').trim().toLowerCase();
   const submittedEmail = input.email.trim().toLowerCase();
 
-  // Owner sign-in uses the server-configured owner password, which is separate from
-  // the owner's Supabase password. After that gate passes, exchange a server-generated
-  // one-time magic-link token for a normal Supabase session; never return a custom JWT.
+  // The owner password is an additional server-side gate. Continue through Supabase
+  // Auth after it passes so the client still receives a real, verifiable Supabase session.
   if (submittedEmail === ownerEmail) {
     const ownerPassword = process.env.OWNER_PASSWORD;
     if (!ownerPassword) {
@@ -67,51 +66,8 @@ app.post('/api/v1/auth/login', authLimiter, asyncRoute(async (req, res) => {
     if (!timingSafeStringEqual(input.password, ownerPassword)) {
       throw new HttpError(401, 'LOGIN_FAILED', 'Owner email or password is incorrect.');
     }
-
-    const { data: generated, error: generateError } = await accountsAdmin.auth.admin.generateLink({
-      type: 'magiclink',
-      email: ownerEmail
-    });
-    const tokenHash = generated?.properties?.hashed_token;
-    if (generateError || !tokenHash) {
-      console.error('Owner session token generation failed:', generateError?.message || 'No token returned');
-      throw new HttpError(503, 'OWNER_SESSION_FAILED', 'Owner credentials were accepted, but a secure session could not be created. Please try again.');
-    }
-
-    const { data: verified, error: verifyError } = await authClient.auth.verifyOtp({
-      email: ownerEmail,
-      token: tokenHash,
-      type: 'magiclink'
-    });
-    if (verifyError || !verified?.session || !verified.user) {
-      console.error('Owner session exchange failed:', verifyError?.message || 'No session returned');
-      throw new HttpError(503, 'OWNER_SESSION_FAILED', 'Owner credentials were accepted, but Supabase could not establish a session. Please try again.');
-    }
-
-    // Keep the configured owner aligned with the role system used by /owner/summary.
-    // This only runs after the server-only owner password has passed for the configured email.
-    const { data: ownerRole, error: roleError } = await accountsAdmin
-      .from('staff_roles').select('id').eq('is_owner_role', true).limit(1).maybeSingle();
-    if (roleError || !ownerRole) {
-      throw new HttpError(503, 'OWNER_ROLE_NOT_CONFIGURED', 'The Vineowner role is not configured. Apply the Vineowner RBAC migration.');
-    }
-    const { error: membershipError } = await accountsAdmin.from('staff_memberships').upsert({
-      user_id: verified.user.id,
-      role_id: ownerRole.id,
-      status: 'active',
-      assigned_by: verified.user.id,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' });
-    if (membershipError) {
-      console.error('Owner role assignment failed:', membershipError.message);
-      throw new HttpError(503, 'OWNER_ROLE_ASSIGNMENT_FAILED', 'Your session was created, but owner access could not be activated. Please contact the site administrator.');
-    }
-
-    res.json({ data: { user: { id: verified.user.id, email: verified.user.email }, session: { accessToken: verified.session.access_token, refreshToken: verified.session.refresh_token, expiresAt: verified.session.expires_at } } });
-    return;
   }
 
-  // Regular customer login remains ordinary Supabase email/password authentication.
   const { data, error } = await authClient.auth.signInWithPassword({ email: input.email, password: input.password });
   if (error || !data?.session || !data.user) throw new HttpError(401, 'LOGIN_FAILED', 'Email or password is incorrect, or the account needs email verification.');
   res.json({ data: { user: { id: data.user.id, email: data.user.email }, session: { accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: data.session.expires_at } } });
