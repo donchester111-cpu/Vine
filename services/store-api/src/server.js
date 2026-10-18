@@ -21,7 +21,7 @@ const catalogAdmin = requirePermission(accountsAdmin, 'products.manage', ['owner
 const supplierView = requirePermission(accountsAdmin, 'suppliers.view', ['owner', 'admin', 'catalog']);
 const supplierManage = requirePermission(accountsAdmin, 'suppliers.manage', ['owner', 'admin', 'catalog']);
 const operationsAdmin = requirePermission(accountsAdmin, 'orders.view', ['owner', 'admin', 'operations', 'support']);
-const publicProductFields = 'id,category_id,sku,slug,name,description,price_kobo,compare_at_price_kobo,currency,image_url,gallery_urls,tag,rating,review_count,stock_quantity,reserved_quantity,status,created_at,updated_at,category:categories(id,name,slug)';
+const publicProductFields = 'id,category_id,sku,slug,name,description,price_kobo,compare_at_price_kobo,currency,image_url,gallery_urls,tag,rating,review_count,stock_quantity,reserved_quantity,status,metadata,created_at,updated_at,category:categories(id,name,slug)';
 
 function toPublicProduct(row) {
   return {
@@ -31,6 +31,7 @@ function toPublicProduct(row) {
     compareAtPriceNgn: row.compare_at_price_kobo == null ? null : Number(row.compare_at_price_kobo) / 100,
     currency: row.currency, imageUrl: row.image_url, galleryUrls: row.gallery_urls || [],
     tag: row.tag, rating: Number(row.rating || 0), reviewCount: Number(row.review_count || 0),
+    specifications: Array.isArray(row.metadata?.specifications) ? row.metadata.specifications.filter(x => x && typeof x.name === 'string' && typeof x.value === 'string').slice(0, 30) : [],
     availableQuantity: Math.max(0, Number(row.stock_quantity) - Number(row.reserved_quantity)),
     category: row.category ? { id: row.category.id, name: row.category.name, slug: row.category.slug } : null
   };
@@ -76,6 +77,299 @@ app.get('/api/v1/products', asyncRoute(async (req, res) => {
   const { data, error, count } = await query.range(from, from + limit - 1);
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
   res.json({ data: { products: (data || []).map(toPublicProduct), page, limit, total: count || 0 } });
+}));
+
+function makeReviewerDisplayName(fullName) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'Vine shopper';
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase() + parts[0].slice(1);
+  return `${parts[0]} ${parts[parts.length - 1].slice(0, 1).toUpperCase()}.`;
+}
+
+app.get('/api/v1/products/:slug/reviews', asyncRoute(async (req, res) => {
+  const slug = safeText(180).parse(req.params.slug);
+  const { data: product, error: productError } = await productsDb.from('products')
+    .select('id,rating,review_count').eq('slug', slug).eq('status', 'published').maybeSingle();
+  if (productError) throw new HttpError(503, 'PRODUCT_REVIEWS_UNAVAILABLE', 'Reviews are temporarily unavailable.');
+  if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
+
+  const page = clampInt(req.query.page, 1, 1, 10000);
+  const limit = clampInt(req.query.limit, 8, 1, 20);
+  const sort = ['newest', 'highest', 'lowest', 'helpful'].includes(String(req.query.sort)) ? String(req.query.sort) : 'newest';
+  const ratingRaw = String(req.query.rating || '').trim();
+  const ratingFilter = ratingRaw ? Number(ratingRaw) : null;
+  if (ratingFilter !== null && (!Number.isInteger(ratingFilter) || ratingFilter < 1 || ratingFilter > 5)) {
+    throw new HttpError(400, 'REVIEW_FILTER_INVALID', 'Choose a rating from 1 to 5 stars.');
+  }
+  const photosOnly = String(req.query.photosOnly || '').toLowerCase() === 'true';
+  let query = productsDb.from('product_reviews')
+    .select('id,rating,title,body,pros,cons,image_urls,helpful_count,is_verified_purchase,created_at,updated_at,customer_id', { count: 'exact' })
+    .eq('product_id', product.id).eq('status', 'published');
+  if (ratingFilter !== null) query = query.eq('rating', ratingFilter);
+  if (photosOnly) query = query.not('image_urls', 'eq', '{}');
+  if (sort === 'highest') query = query.order('rating', { ascending: false }).order('created_at', { ascending: false });
+  else if (sort === 'lowest') query = query.order('rating', { ascending: true }).order('created_at', { ascending: false });
+  else if (sort === 'helpful') query = query.order('helpful_count', { ascending: false }).order('created_at', { ascending: false });
+  else query = query.order('created_at', { ascending: false });
+  const from = (page - 1) * limit;
+  const [{ data: reviews, error: reviewError, count }, ...ratingCounts] = await Promise.all([
+    query.range(from, from + limit - 1),
+    ...[1,2,3,4,5].map(rating => productsDb.from('product_reviews').select('id', { count: 'exact', head: true }).eq('product_id', product.id).eq('status', 'published').eq('rating', rating))
+  ]);
+  if (reviewError || ratingCounts.some(x => x.error)) throw new HttpError(503, 'PRODUCT_REVIEWS_UNAVAILABLE', 'Reviews are temporarily unavailable.');
+  const userIds = [...new Set((reviews || []).map(row => row.customer_id))];
+  let profileRows = [];
+  if (userIds.length) {
+    const { data, error } = await accountsAdmin.from('profiles').select('user_id,full_name').in('user_id', userIds);
+    if (!error) profileRows = data || [];
+  }
+  const names = new Map(profileRows.map(row => [row.user_id, makeReviewerDisplayName(row.full_name)]));
+  res.json({ data: {
+    productId: product.id,
+    summary: {
+      averageRating: Number(product.rating || 0),
+      reviewCount: Number(product.review_count || 0),
+      distribution: Object.fromEntries([1,2,3,4,5].map((rating, index) => [rating, Number(ratingCounts[index].count || 0)]))
+    },
+    reviews: (reviews || []).map(row => ({
+      id: row.id, rating: Number(row.rating), title: row.title, body: row.body,
+      pros: row.pros || '', cons: row.cons || '', imageUrls: row.image_urls || [],
+      helpfulCount: Number(row.helpful_count || 0), verifiedPurchase: Boolean(row.is_verified_purchase),
+      reviewerName: names.get(row.customer_id) || 'Vine shopper', createdAt: row.created_at, updatedAt: row.updated_at
+    })),
+    total: Number(count || 0), page, limit, hasMore: page * limit < Number(count || 0)
+  }});
+}));
+
+app.post('/api/v1/products/:slug/reviews', auth, asyncRoute(async (req, res) => {
+  const slug = safeText(180).parse(req.params.slug);
+  const input = z.object({
+    rating: z.number().int().min(1).max(5),
+    title: z.string().trim().min(3).max(120),
+    body: z.string().trim().min(10).max(3000),
+    pros: z.string().trim().max(700).default(''),
+    cons: z.string().trim().max(700).default(''),
+    imagePaths: z.array(z.string().trim().regex(/^reviews\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp)$/i)).max(3).default([])
+  }).parse(req.body);
+  const { data: product, error: productError } = await productsDb.from('products').select('id').eq('slug', slug).eq('status', 'published').maybeSingle();
+  if (productError) throw new HttpError(503, 'PRODUCT_UNAVAILABLE', 'We could not confirm this product. Please try again.');
+  if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
+
+  const { data: paidOrders, error: ordersError } = await ordersDb.from('orders').select('id')
+    .eq('customer_id', req.user.id).eq('payment_status', 'paid').limit(500);
+  if (ordersError) throw new HttpError(503, 'PURCHASE_CHECK_FAILED', 'Your purchase could not be verified yet. Please try again.');
+  const orderIds = (paidOrders || []).map(row => row.id);
+  if (!orderIds.length) throw new HttpError(403, 'VERIFIED_PURCHASE_REQUIRED', 'Only customers who purchased this product through Vine can leave a review.');
+  const { data: matchingItems, error: itemsError } = await ordersDb.from('order_items').select('order_id')
+    .eq('product_id', product.id).in('order_id', orderIds).limit(1);
+  if (itemsError) throw new HttpError(503, 'PURCHASE_CHECK_FAILED', 'Your purchase could not be verified yet. Please try again.');
+  if (!matchingItems?.length) throw new HttpError(403, 'VERIFIED_PURCHASE_REQUIRED', 'Only customers who purchased this product through Vine can leave a review.');
+
+  const storage = productsDb.storage.from(productImageBucket);
+  const validPrefix = `reviews/${req.user.id}/`;
+  if (input.imagePaths.some(path => !path.startsWith(validPrefix))) throw new HttpError(400, 'REVIEW_IMAGE_INVALID', 'One of the selected review photos is invalid. Remove it and try again.');
+  const imageUrls = input.imagePaths.map(path => storage.getPublicUrl(path)?.data?.publicUrl).filter(url => typeof url === 'string' && /^https:\/\//i.test(url));
+  if (imageUrls.length !== input.imagePaths.length) throw new HttpError(400, 'REVIEW_IMAGE_INVALID', 'One of the selected review photos could not be identified.');
+
+  const { data, error } = await productsDb.from('product_reviews').upsert({
+    product_id: product.id, customer_id: req.user.id, order_id: matchingItems[0].order_id,
+    rating: input.rating, title: input.title, body: input.body, pros: input.pros, cons: input.cons,
+    image_urls: imageUrls, status: 'published', is_verified_purchase: true, updated_at: new Date().toISOString()
+  }, { onConflict: 'product_id,customer_id' })
+    .select('id,rating,title,body,pros,cons,image_urls,helpful_count,is_verified_purchase,created_at,updated_at')
+    .single();
+  if (error || !data) throw new HttpError(503, 'REVIEW_SAVE_FAILED', 'Your review could not be saved. Please try again.');
+  res.status(201).json({ data: { ...data, imageUrls: data.image_urls || [], rating: Number(data.rating), helpfulCount: Number(data.helpful_count || 0), verifiedPurchase: true } });
+}));
+
+app.post('/api/v1/reviews/images', auth, productImageBody, asyncRoute(async (req, res) => {
+  // Review photos are accepted only after checking that this signed-in customer purchased this exact item.
+  // This prevents the public-read storage bucket from becoming a general-purpose image-hosting endpoint.
+  const reviewSlug = safeText(180).parse(String(req.get('x-vine-product-slug') || '').trim());
+  const { data: reviewProduct, error: reviewProductError } = await productsDb.from('products')
+    .select('id').eq('slug', reviewSlug).eq('status', 'published').maybeSingle();
+  if (reviewProductError) throw new HttpError(503, 'PURCHASE_CHECK_FAILED', 'We could not verify this product before uploading a review photo. Please try again.');
+  if (!reviewProduct) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
+  const { data: paidOrders, error: paidOrdersError } = await ordersDb.from('orders')
+    .select('id').eq('customer_id', req.user.id).eq('payment_status', 'paid').limit(500);
+  if (paidOrdersError) throw new HttpError(503, 'PURCHASE_CHECK_FAILED', 'Your purchase could not be verified. Please try again.');
+  const orderIds = (paidOrders || []).map(row => row.id);
+  if (!orderIds.length) throw new HttpError(403, 'VERIFIED_PURCHASE_REQUIRED', 'Only customers who purchased this product through Vine can upload review photos.');
+  const { data: matchingItems, error: itemsError } = await ordersDb.from('order_items')
+    .select('order_id').eq('product_id', reviewProduct.id).in('order_id', orderIds).limit(1);
+  if (itemsError) throw new HttpError(503, 'PURCHASE_CHECK_FAILED', 'Your product purchase could not be verified. Please try again.');
+  if (!matchingItems?.length) throw new HttpError(403, 'VERIFIED_PURCHASE_REQUIRED', 'Only customers who purchased this product through Vine can upload review photos.');
+
+  const contentType = String(req.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const type = productImageTypes.get(contentType);
+  if (!type) throw new HttpError(415, 'REVIEW_IMAGE_TYPE_UNSUPPORTED', 'Choose a JPG, PNG or WebP image.');
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new HttpError(400, 'REVIEW_IMAGE_EMPTY', 'Choose a photo before uploading.');
+  if (!type.signature(req.body)) throw new HttpError(400, 'REVIEW_IMAGE_INVALID', 'The selected file is not a valid image. Choose another photo.');
+  if (req.body.length > 5 * 1024 * 1024) throw new HttpError(413, 'REVIEW_IMAGE_TOO_LARGE', 'The optimised photo must be 5 MB or smaller.');
+  const path = `reviews/${req.user.id}/${crypto.randomUUID()}.${type.extension}`;
+  const storage = productsDb.storage.from(productImageBucket);
+  const { error } = await storage.upload(path, req.body, { contentType, cacheControl: '31536000', upsert: false });
+  if (error) throw new HttpError(503, 'REVIEW_IMAGE_UPLOAD_FAILED', 'This review photo could not be saved. Please try again.');
+  const imageUrl = storage.getPublicUrl(path)?.data?.publicUrl;
+  if (!imageUrl || !/^https:\/\//i.test(imageUrl)) {
+    await storage.remove([path]).catch(() => {});
+    throw new HttpError(503, 'REVIEW_IMAGE_URL_FAILED', 'The photo was saved but its public link could not be created.');
+  }
+  res.status(201).json({ data: { imageUrl, path, contentType, sizeBytes: req.body.length } });
+}));
+
+app.delete('/api/v1/reviews/images', auth, asyncRoute(async (req, res) => {
+  const input = z.object({ path: z.string().trim().regex(/^reviews\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp)$/i) }).parse(req.body);
+  if (!input.path.startsWith(`reviews/${req.user.id}/`)) throw new HttpError(403, 'REVIEW_IMAGE_OWNERSHIP_REQUIRED', 'You can only remove photos uploaded from your own account.');
+  const storage = productsDb.storage.from(productImageBucket);
+  const { data: linked, error: linkedError } = await productsDb.from('product_reviews').select('id').contains('image_urls', [storage.getPublicUrl(input.path).data.publicUrl]).limit(1);
+  if (linkedError) throw new HttpError(503, 'REVIEW_IMAGE_REFERENCE_CHECK_FAILED', 'We could not safely check whether this photo is already in use.');
+  if (linked?.length) throw new HttpError(409, 'REVIEW_IMAGE_IN_USE', 'This photo is already attached to a saved review.');
+  const { error } = await storage.remove([input.path]);
+  if (error) throw new HttpError(503, 'REVIEW_IMAGE_DELETE_FAILED', 'The unused photo could not be removed.');
+  res.status(204).end();
+}));
+
+app.post('/api/v1/reviews/:reviewId/helpful', auth, asyncRoute(async (req, res) => {
+  const reviewId = uuidSchema.parse(req.params.reviewId);
+  const { data: review, error: reviewError } = await productsDb.from('product_reviews').select('id,status,customer_id').eq('id', reviewId).maybeSingle();
+  if (reviewError) throw new HttpError(503, 'REVIEW_UNAVAILABLE', 'This review could not be loaded.');
+  if (!review || review.status !== 'published') throw new HttpError(404, 'REVIEW_NOT_FOUND', 'This review is no longer available.');
+  if (String(review.customer_id) === String(req.user.id)) throw new HttpError(409, 'REVIEW_SELF_VOTE', 'You cannot mark your own review as helpful.');
+  const { error } = await productsDb.from('product_review_votes').upsert({ review_id: reviewId, customer_id: req.user.id }, { onConflict: 'review_id,customer_id', ignoreDuplicates: true });
+  if (error) throw new HttpError(503, 'REVIEW_VOTE_FAILED', 'Your vote could not be saved. Please try again.');
+  const { data: fresh, error: freshError } = await productsDb.from('product_reviews').select('helpful_count').eq('id', reviewId).single();
+  if (freshError) throw new HttpError(503, 'REVIEW_VOTE_FAILED', 'Your vote was saved, but its count could not be refreshed.');
+  res.json({ data: { reviewId, helpfulCount: Number(fresh.helpful_count || 0), markedHelpful: true } });
+}));
+
+// Product questions and answers let shoppers ask clear product-specific questions and let authorised Vine staff reply.
+app.get('/api/v1/products/:slug/questions', asyncRoute(async (req, res) => {
+  const slug = safeText(180).parse(req.params.slug);
+  const { data: product, error: productError } = await productsDb.from('products')
+    .select('id').eq('slug', slug).eq('status', 'published').maybeSingle();
+  if (productError) throw new HttpError(503, 'PRODUCT_QUESTIONS_UNAVAILABLE', 'Product questions are temporarily unavailable.');
+  if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
+
+  const page = clampInt(req.query.page, 1, 1, 10000);
+  const limit = clampInt(req.query.limit, 8, 1, 20);
+  const from = (page - 1) * limit;
+  const { data: questions, error, count } = await productsDb.from('product_questions')
+    .select('id,question,answer,is_verified_purchase,created_at,answered_at,customer_id', { count: 'exact' })
+    .eq('product_id', product.id).eq('status', 'answered')
+    .order('answered_at', { ascending: false }).range(from, from + limit - 1);
+  if (error) throw new HttpError(503, 'PRODUCT_QUESTIONS_UNAVAILABLE', 'Product questions are temporarily unavailable.');
+
+  const userIds = [...new Set((questions || []).map(row => row.customer_id))];
+  let profileRows = [];
+  if (userIds.length) {
+    const { data } = await accountsAdmin.from('profiles').select('user_id,full_name').in('user_id', userIds);
+    profileRows = data || [];
+  }
+  const names = new Map(profileRows.map(row => [row.user_id, makeReviewerDisplayName(row.full_name)]));
+  res.json({ data: {
+    questions: (questions || []).map(row => ({
+      id: row.id, question: row.question, answer: row.answer,
+      verifiedPurchase: Boolean(row.is_verified_purchase),
+      questionerName: names.get(row.customer_id) || 'Vine shopper',
+      createdAt: row.created_at, answeredAt: row.answered_at
+    })),
+    total: Number(count || 0), page, limit, hasMore: page * limit < Number(count || 0)
+  } });
+}));
+
+app.post('/api/v1/products/:slug/questions', auth, asyncRoute(async (req, res) => {
+  const slug = safeText(180).parse(req.params.slug);
+  const input = z.object({ question: z.string().trim().min(10).max(1500) }).parse(req.body);
+  const { data: product, error: productError } = await productsDb.from('products')
+    .select('id').eq('slug', slug).eq('status', 'published').maybeSingle();
+  if (productError) throw new HttpError(503, 'PRODUCT_UNAVAILABLE', 'We could not confirm this product. Please try again.');
+  if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
+
+  // Keep the form safe to use without a purchase, but prevent repeated accidental submissions.
+  const { data: recentQuestion, error: recentError } = await productsDb.from('product_questions')
+    .select('created_at').eq('product_id', product.id).eq('customer_id', req.user.id)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (recentError) throw new HttpError(503, 'QUESTION_CHECK_FAILED', 'Your question could not be checked. Please try again.');
+  if (recentQuestion && Date.now() - new Date(recentQuestion.created_at).getTime() < 60_000) {
+    throw new HttpError(429, 'QUESTION_COOLDOWN', 'Please wait a minute before sending another question about this product.');
+  }
+
+  let verifiedPurchase = false;
+  try {
+    const { data: paidOrders, error: ordersError } = await ordersDb.from('orders').select('id')
+      .eq('customer_id', req.user.id).eq('payment_status', 'paid').limit(500);
+    if (!ordersError && paidOrders?.length) {
+      const orderIds = paidOrders.map(row => row.id);
+      const { data: matchingItems, error: itemsError } = await ordersDb.from('order_items').select('order_id')
+        .eq('product_id', product.id).in('order_id', orderIds).limit(1);
+      verifiedPurchase = !itemsError && Boolean(matchingItems?.length);
+    }
+  } catch { verifiedPurchase = false; }
+
+  const { data, error } = await productsDb.from('product_questions').insert({
+    product_id: product.id, customer_id: req.user.id, question: input.question,
+    status: 'pending', is_verified_purchase: verifiedPurchase
+  }).select('id,question,status,is_verified_purchase,created_at').single();
+  if (error || !data) throw new HttpError(503, 'QUESTION_SUBMIT_FAILED', 'Your question could not be sent. Please try again.');
+  res.status(201).json({ data: { ...data, verifiedPurchase: Boolean(data.is_verified_purchase), message: 'Your question has been sent to Vine. It will appear here after a team member replies.' } });
+}));
+
+app.get('/api/v1/admin/questions', auth, catalogAdmin, asyncRoute(async (req, res) => {
+  const status = String(req.query.status || 'pending');
+  if (!['pending', 'answered', 'hidden', 'all'].includes(status)) {
+    throw new HttpError(400, 'QUESTION_STATUS_INVALID', 'Choose pending, answered, hidden, or all questions.');
+  }
+  const limit = clampInt(req.query.limit, 100, 1, 200);
+  let query = productsDb.from('product_questions')
+    .select('id,product_id,customer_id,question,answer,status,is_verified_purchase,created_at,answered_at,updated_at,product:products(id,name,slug,image_url)', { count: 'exact' })
+    .order('created_at', { ascending: false }).limit(limit);
+  if (status !== 'all') query = query.eq('status', status);
+  const { data, error, count } = await query;
+  if (error) throw new HttpError(503, 'QUESTIONS_ADMIN_UNAVAILABLE', 'Customer questions could not be loaded.');
+  const userIds = [...new Set((data || []).map(row => row.customer_id))];
+  let profileRows = [];
+  if (userIds.length) {
+    const { data: profiles, error: profileError } = await accountsAdmin.from('profiles').select('user_id,full_name').in('user_id', userIds);
+    if (profileError) throw new HttpError(503, 'QUESTIONS_CUSTOMERS_UNAVAILABLE', 'Questioner details could not be loaded.');
+    profileRows = profiles || [];
+  }
+  const names = new Map(profileRows.map(row => [row.user_id, makeReviewerDisplayName(row.full_name)]));
+  res.json({ data: (data || []).map(row => ({
+    id: row.id, productId: row.product_id, customerId: row.customer_id,
+    product: row.product || null, question: row.question, answer: row.answer,
+    status: row.status, verifiedPurchase: Boolean(row.is_verified_purchase),
+    questionerName: names.get(row.customer_id) || 'Vine shopper',
+    createdAt: row.created_at, answeredAt: row.answered_at, updatedAt: row.updated_at
+  })), total: Number(count || 0) });
+}));
+
+app.patch('/api/v1/admin/questions/:id', auth, catalogAdmin, asyncRoute(async (req, res) => {
+  const id = uuidSchema.parse(req.params.id);
+  const input = z.object({
+    answer: z.string().trim().min(10).max(3000).optional(),
+    status: z.enum(['pending', 'hidden']).optional()
+  }).refine(v => Object.keys(v).length > 0, 'Provide an answer or choose a status.').refine(v => !(v.answer !== undefined && v.status !== undefined), 'Save an answer or change status, not both at once.').parse(req.body);
+  const now = new Date().toISOString();
+  const patch = { updated_at: now };
+  if (input.answer !== undefined) {
+    patch.answer = input.answer;
+    patch.status = 'answered';
+    patch.answered_by = req.user.id;
+    patch.answered_at = now;
+  } else if (input.status === 'hidden') {
+    patch.status = 'hidden';
+  } else if (input.status === 'pending') {
+    patch.status = 'pending';
+    patch.answer = '';
+    patch.answered_by = null;
+    patch.answered_at = null;
+  }
+  const { data, error } = await productsDb.from('product_questions').update(patch).eq('id', id)
+    .select('id,product_id,customer_id,question,answer,status,is_verified_purchase,created_at,answered_at,updated_at').maybeSingle();
+  if (error) throw new HttpError(400, 'QUESTION_UPDATE_FAILED', 'This question could not be updated. Please try again.');
+  if (!data) throw new HttpError(404, 'QUESTION_NOT_FOUND', 'That question could not be found.');
+  res.json({ data: { ...data, verifiedPurchase: Boolean(data.is_verified_purchase) } });
 }));
 
 app.get('/api/v1/products/:slug', asyncRoute(async (req, res) => {
@@ -151,6 +445,7 @@ const productCreateSchema = z.object({
   name: safeText(180), description: z.string().max(10000).default(''),
   priceNgn: z.number().finite().min(0).max(100000000), compareAtPriceNgn: z.number().finite().min(0).max(100000000).nullable().optional(),
   imageUrl: httpsUrlSchema.nullable().optional(), galleryUrls: z.array(httpsUrlSchema).max(8).default([]),
+  specifications: z.array(z.object({ name: safeText(80), value: safeText(240) })).max(30).default([]),
   tag: optionalText(40), stockQuantity: z.number().int().min(0).max(10000000).default(0),
   status: z.enum(['draft','published','archived']).default('draft')
 }).refine(v => v.compareAtPriceNgn == null || v.compareAtPriceNgn >= v.priceNgn, { path: ['compareAtPriceNgn'], message: 'Compare-at price must not be lower than the selling price.' });
@@ -162,6 +457,7 @@ function productPatchRow(input) {
     if (key === 'priceNgn') row.price_kobo = Math.round(value * 100);
     else if (key === 'compareAtPriceNgn') row.compare_at_price_kobo = value == null ? null : Math.round(value * 100);
     else if (key === 'stockQuantity') row.stock_quantity = value;
+    else if (key === 'specifications') row.metadata = { specifications: value };
     else if (map[key]) row[map[key]] = value === '' ? null : value;
   }
   row.updated_at = new Date().toISOString();
@@ -174,7 +470,7 @@ app.post('/api/v1/admin/products', auth, catalogAdmin, asyncRoute(async (req, re
     category_id: input.categoryId || null, sku: input.sku, slug: input.slug, name: input.name, description: input.description,
     price_kobo: Math.round(input.priceNgn * 100), compare_at_price_kobo: input.compareAtPriceNgn == null ? null : Math.round(input.compareAtPriceNgn * 100),
     image_url: input.imageUrl || null, gallery_urls: input.galleryUrls, tag: input.tag || null,
-    stock_quantity: input.stockQuantity, status: input.status
+    metadata: { specifications: input.specifications || [] }, stock_quantity: input.stockQuantity, status: input.status
   }).select(publicProductFields).single();
   if (error) throw new HttpError(409, 'PRODUCT_CREATE_FAILED', 'The product could not be created. Check the SKU, slug, and category.');
   res.status(201).json({ data: toPublicProduct(data) });
