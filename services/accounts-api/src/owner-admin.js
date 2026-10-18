@@ -1,6 +1,22 @@
 import { z } from 'zod';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { resolveStaffAccess } from '@vine/shared/rbac';
+import { assertVineEmailConfigured, escapeVineHtml, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
+
+
+async function findAuthUserByEmail(accountsAdmin, email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  const pageSize = 1000;
+  for (let page = 1; page <= 20; page += 1) {
+    const { data, error } = await accountsAdmin.auth.admin.listUsers({ page, perPage: pageSize });
+    if (error) throw new HttpError(503, 'STAFF_DIRECTORY_UNAVAILABLE', 'Vine could not verify the staff directory. Please try again shortly.');
+    const users = data?.users || [];
+    const found = users.find(user => String(user.email || '').trim().toLowerCase() === normalized);
+    if (found) return found;
+    if (users.length < pageSize) return null;
+  }
+  throw new HttpError(503, 'STAFF_DIRECTORY_UNAVAILABLE', 'Vine could not verify the staff directory. Please try again shortly.');
+}
 
 export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
   const ownerOnly = async (req, _res, next) => {
@@ -29,6 +45,18 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
   app.get('/api/v1/staff/me', auth, asyncRoute(async (req, res) => {
     const access = await resolveStaffAccess(accountsAdmin, req.user);
     res.json({ data: access });
+  }));
+
+  app.get('/api/v1/owner/email-provider-status', ...owner, asyncRoute(async (_req, res) => {
+    const configured = isVineEmailConfigured();
+    res.json({ data: {
+      provider: configured ? 'resend' : null,
+      configured,
+      senderAddressPresent: Boolean(String(process.env.VINE_EMAIL_FROM || '').trim()),
+      message: configured
+        ? 'Email provider settings are present. Resend must still accept the sender domain before delivery can be considered verified.'
+        : 'Email sending is not configured. Add RESEND_API_KEY and VINE_EMAIL_FROM to the Accounts and Operations services.'
+    } });
   }));
 
   app.get('/api/v1/owner/summary', ...owner, asyncRoute(async (req,res)=>{
@@ -91,13 +119,49 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
   }));
   app.post('/api/v1/owner/staff/invite', ...owner, asyncRoute(async(req,res)=>{
     const input=z.object({email:z.string().trim().email().max(254),roleId:z.string().uuid(),fullName:z.string().trim().max(120).default('')}).parse(req.body);
+    assertVineEmailConfigured();
+    const email=input.email.trim().toLowerCase();
     const {data:role,error:roleErr}=await accountsAdmin.from('staff_roles').select('id,name,is_owner_role').eq('id',input.roleId).single();
     if(roleErr||!role||role.is_owner_role) throw new HttpError(400,'STAFF_ROLE_INVALID','Choose a valid non-owner worker role.');
-    const {data,error}=await accountsAdmin.auth.admin.inviteUserByEmail(input.email,{data:{full_name:input.fullName,account_type:'vine_staff'},redirectTo:process.env.VINE_STAFF_INVITE_REDIRECT_URL||'https://vinestore.com.ng/vineger.html'});
-    if(error||!data?.user) throw new HttpError(400,'STAFF_INVITE_FAILED','Staff invitation failed. The email may already have an account.');
-    const {error:membershipErr}=await accountsAdmin.from('staff_memberships').upsert({user_id:data.user.id,role_id:role.id,status:'active',assigned_by:req.user.id,updated_at:new Date().toISOString()},{onConflict:'user_id'});
-    if(membershipErr) throw new HttpError(503,'STAFF_ASSIGN_FAILED','The invite was created but the role assignment failed; resolve it in Vineowner before inviting again.');
-    await audit(req,'staff.invited','staff',data.user.id,{email:input.email,role:role.name});res.status(201).json({data:{userId:data.user.id,email:input.email,role:role.name,status:'invited'}});
+
+    const existingUser=await findAuthUserByEmail(accountsAdmin,email);
+    const redirectTo=String(process.env.VINE_STAFF_INVITE_REDIRECT_URL||'https://vinestore.com.ng/vineger.html').trim();
+    let user=existingUser;
+    let linkResult;
+    if(existingUser){
+      const nextMetadata={...(existingUser.user_metadata||{}),account_type:'vine_staff'};
+      if(input.fullName) nextMetadata.full_name=input.fullName;
+      const {data:updateData,error:updateError}=await accountsAdmin.auth.admin.updateUserById(existingUser.id,{user_metadata:nextMetadata});
+      if(updateError||!updateData?.user) throw new HttpError(503,'STAFF_ACCOUNT_UPDATE_FAILED','The existing account could not be prepared for staff access.');
+      user=updateData.user;
+      const {data,error}=await accountsAdmin.auth.admin.generateLink({type:'magiclink',email,options:{redirectTo}});
+      if(error||!data?.properties?.action_link) throw new HttpError(503,'STAFF_LINK_GENERATION_FAILED','A secure staff sign-in link could not be prepared.');
+      linkResult=data;
+    }else{
+      const {data,error}=await accountsAdmin.auth.admin.generateLink({type:'invite',email,options:{data:{full_name:input.fullName,account_type:'vine_staff'},redirectTo}});
+      if(error||!data?.user||!data?.properties?.action_link) throw new HttpError(400,'STAFF_INVITE_FAILED','Vine could not prepare this invitation. Check the address and try again.');
+      user=data.user;
+      linkResult=data;
+    }
+
+    const {error:membershipErr}=await accountsAdmin.from('staff_memberships').upsert({user_id:user.id,role_id:role.id,status:'active',assigned_by:req.user.id,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+    if(membershipErr) throw new HttpError(503,'STAFF_ASSIGN_FAILED','The account was prepared, but its staff role could not be saved. Refresh the staff list before retrying.');
+
+    const actionLink=linkResult.properties.action_link;
+    try {
+      await sendVineEmail({
+        to:email,
+        subject:'You are invited to Vineger',
+        text:`You have been invited to the Vine staff workspace as ${role.name}. Open this secure link to sign in: ${actionLink}\n\nIf you were not expecting this invitation, you can ignore this email.`,
+        html:`<div style="font-family:Arial,sans-serif;line-height:1.6;color:#173b28;max-width:560px;margin:0 auto"><h2 style="color:#087f45">Welcome to Vineger</h2><p>You have been invited to the Vine staff workspace as <strong>${escapeVineHtml(role.name)}</strong>.</p><p><a href="${escapeVineHtml(actionLink)}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#087f45;color:#fff;text-decoration:none;font-weight:700">Accept invitation and sign in</a></p><p style="font-size:12px;color:#64756a">This secure link is for the invited account. If you were not expecting this invitation, you can ignore this email.</p></div>`,
+        idempotencyKey:`vineger-invite:${user.id}:${linkResult.properties?.email_otp||linkResult.properties?.hashed_token||Date.now()}`
+      });
+    } catch(error) {
+      await audit(req,'staff.invitation_email_failed','staff',user.id,{email,role:role.name,code:error.code||'EMAIL_DELIVERY_FAILED'});
+      throw error;
+    }
+    await audit(req,'staff.invited','staff',user.id,{email,role:role.name,delivery:'sent'});
+    res.status(201).json({data:{userId:user.id,email,role:role.name,status:'invited',emailSent:true}});
   }));
   app.patch('/api/v1/owner/staff/:userId', ...owner, asyncRoute(async(req,res)=>{
     const input=z.object({roleId:z.string().uuid().optional(),status:z.enum(['active','suspended']).optional()}).refine(v=>Object.keys(v).length>0).parse(req.body);
@@ -114,7 +178,7 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
     if(error) throw new HttpError(503,'STAFF_LIST_FAILED','Staff list could not be loaded.');
     const rows=await Promise.all((data||[]).map(async row=>{const {data:u}=await accountsAdmin.auth.admin.getUserById(row.user_id);return {...row,email:u?.user?.email||'',fullName:u?.user?.user_metadata?.full_name||''};}));res.json({data:rows});
   }));
-  const settingKeys = new Set(['storefront','commerce','shipping','payments','notifications','security','seo','policies','marketing','integrations']);
+  const settingKeys = new Set(['storefront','shipping','seo','policies']);
   const assertSafeSettings = (value) => {
     const visit = (node, path = '') => {
       if (!node || typeof node !== 'object') return;
