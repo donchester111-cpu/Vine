@@ -22,7 +22,7 @@ export function applySecurity(app, options = {}) {
       return callback(new Error('Origin is not permitted by Vine API CORS policy.'));
     },
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Request-ID'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Request-ID', 'X-Vine-Product-Slug'],
     exposedHeaders: ['X-Request-ID'],
     credentials: false,
     maxAge: 600
