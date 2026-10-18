@@ -99,6 +99,8 @@ html{background:#fff;scroll-behavior:smooth}body{background:#fff;color:var(--ink
 .account-feature-icon{width:31px;height:31px;display:grid;place-items:center;border-radius:9px;background:#eaf8ee;color:#07884f;font-weight:900}
 .account-feature-grid strong{font-size:12px;color:#293d30}
 .account-feature-grid small{font-size:10px;color:#879389}
+.account-history-list{display:grid;gap:10px}.account-history-item{display:grid;grid-template-columns:56px minmax(0,1fr);gap:12px;padding:12px;border:1px solid #e9efea;border-radius:12px;background:#fff}.account-history-item img{width:56px;height:56px;object-fit:cover;border-radius:9px;background:#f1f5f2}.account-history-item h4{font-size:12px;line-height:1.45;margin:0 0 5px;color:#26382c}.account-history-item p{font-size:11px;line-height:1.6;color:#607166;margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}.account-history-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:10px;color:#7b897f}.account-history-status{display:inline-flex;padding:4px 7px;border-radius:99px;background:#edf7f0;color:#087448;font-size:9px;font-weight:850;text-transform:capitalize}.account-history-status.pending{background:#fff4df;color:#925b00}.account-history-status.rejected,.account-history-status.hidden{background:#fff0ed;color:#a52d24}.account-history-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.account-history-actions button{border:1px solid #d8e8dd;background:#f4fbf6;color:#087448;border-radius:8px;padding:7px 9px;font-size:10px;font-weight:800}
+
 @media(max-width:650px){.account-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.account-feature-grid button{padding:11px}}
 
 [hidden]{display:none!important}
@@ -382,6 +384,10 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 .detail-title-actions{display:flex;gap:6px;align-items:center;flex:none}.detail-title-actions .detail-share-button{white-space:nowrap}.detail-title-actions .detail-share-button.active{background:#e7f7ed;border-color:#caecd8;color:#087f45;font-weight:800}
 .detail-review-images button{cursor:zoom-in}.detail-review-photo-hint{font-size:11px;color:var(--muted);margin:8px 0 0}.detail-image-lightbox{touch-action:pan-y}.detail-review-card[data-review-card] .detail-review-card-stars{white-space:nowrap}
 @media(max-width:640px){.detail-title-row{align-items:flex-start}.detail-title-actions{flex-direction:column;align-items:stretch}.detail-title-actions .detail-share-button{font-size:11px;padding:7px 9px}.detail-review-images{overflow-x:auto;scroll-snap-type:x mandatory}.detail-review-images button{scroll-snap-align:start;flex:none}}
+
+.store-announcement{padding:10px 16px;background:#e3f7eb;color:#086b40;text-align:center;font-size:12px;font-weight:800;border-bottom:1px solid #c9ecd7}.store-announcement[hidden]{display:none}.store-policy-footer{background:#f5f8f6;border-top:1px solid #e6eee8;padding:12px 0 18px}.store-policy-links{display:flex;gap:9px 16px;flex-wrap:wrap;align-items:center}.store-policy-links button,.store-policy-links a{border:0;background:transparent;padding:3px 0;color:#526b5b;text-decoration:none;font-size:10px;font-weight:750}.store-policy-links button:hover,.store-policy-links a:hover{color:#007d47;text-decoration:underline}.footer-support-contacts{display:flex;gap:8px;flex-wrap:wrap}.footer-support-contacts a{color:inherit;text-decoration:none}.store-policy-dialog{width:min(640px,calc(100% - 28px));max-height:min(78dvh,720px);border:1px solid #dbe8df;border-radius:16px;padding:0;background:#fff;color:#1a2c21;box-shadow:0 25px 80px #0d311e40}.store-policy-dialog::backdrop{background:#0a2117a6;backdrop-filter:blur(3px)}.store-policy-dialog-head{position:sticky;top:0;background:#fff;border-bottom:1px solid #e8eee9;padding:15px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px}.store-policy-dialog-head h2{font-size:18px;margin:0}.store-policy-dialog-head button{width:34px;height:34px;border:0;border-radius:10px;background:#edf7f0;color:#12653e;font-size:23px}.store-policy-dialog-body{padding:18px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.75;color:#43594a}.store-policy-dialog-body:empty{display:none}
+@media(max-width:700px){.store-announcement{font-size:10px;padding:9px 12px}.store-policy-links{gap:8px 12px}.store-policy-links button,.store-policy-links a{font-size:9px}.vine-mini-footer .footer-support-contacts{display:flex;flex-wrap:wrap}}
+
 </style>
 <script type="application/ld+json" id="vineProductStructuredData">{}</script>
 </head>
@@ -408,6 +414,7 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
     </label>
   </div>
 </header>
+<div id="storeAnnouncement" class="store-announcement" role="status" hidden></div>
 <main id="homeView" class="vine-home">
   <section class="quick-categories-section" aria-label="Shop categories">
     <div class="wrap">
@@ -483,34 +490,36 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
     <div class="cart-trust-note"><span class="cart-trust-check">✓</span><div><strong>Your bag, your choice.</strong><small>Choose the items you want to check out. Final delivery charges and payment status are confirmed by Vine's server.</small></div></div>
     <div class="cart-page-layout">
       <section class="cart-page-panel" aria-label="Items in your bag"><div class="cart-page-toolbar"><label class="cart-select-all"><input id="cartSelectAll" type="checkbox"><span>Select all items</span></label><button id="cartRemoveSelected" class="storefront-text-btn" type="button">Remove selected</button></div><div id="cartPageItems" class="cart-page-items" aria-live="polite"></div></section>
-      <aside class="cart-summary-panel"><h2>Order summary</h2><div class="cart-summary-row"><span>Selected items</span><strong id="cartSummaryCount">0 items</strong></div><div class="cart-summary-row"><span>Subtotal</span><strong id="cartSummarySubtotal">₦0</strong></div><div class="cart-summary-row muted-row"><span>Delivery</span><span>Calculated at checkout</span></div><div class="cart-summary-total"><span>Estimated subtotal</span><strong id="cartSummaryTotal">₦0</strong></div><p class="cart-summary-note">Prices are displayed from the latest catalogue data held by this storefront. Vine's server rechecks current price and stock before an order can be created.</p><button type="button" id="cartPageCheckout" class="cart-page-checkout">Checkout selected items <span aria-hidden="true">→</span></button><button type="button" class="cart-summary-continue" onclick="navigateView('home')">Keep shopping</button><div id="cartPageMessage" class="cart-page-message" role="status" hidden></div></aside>
+      <aside class="cart-summary-panel"><h2>Order summary</h2><div class="cart-summary-row"><span>Selected items</span><strong id="cartSummaryCount">0 items</strong></div><div class="cart-summary-row"><span>Subtotal</span><strong id="cartSummarySubtotal">₦0</strong></div><div class="cart-summary-row muted-row"><span>Delivery</span><span id="cartSummaryDeliveryLabel">Confirmed before order</span></div><div class="cart-summary-total"><span>Estimated subtotal</span><strong id="cartSummaryTotal">₦0</strong></div><p class="cart-summary-note">Prices are displayed from the latest catalogue data held by this storefront. Vine's server rechecks current price and stock before an order can be created.</p><button type="button" id="cartPageCheckout" class="cart-page-checkout">Checkout selected items <span aria-hidden="true">→</span></button><button type="button" class="cart-summary-continue" onclick="navigateView('home')">Keep shopping</button><div id="cartPageMessage" class="cart-page-message" role="status" hidden></div></aside>
     </div>
   </div>
 </section>
 
 <section id="accountView" class="storefront-view" hidden aria-labelledby="accountPageTitle">
   <div class="storefront-page-wrap account-page-wrap">
-    <div class="storefront-page-heading"><div><span class="vine-eyebrow">YOUR VINE SPACE</span><h1 id="accountPageTitle">Your account</h1><p>Manage your profile, delivery addresses, orders and saved finds.</p></div><button type="button" class="storefront-outline-btn" onclick="navigateView('home')">← Back to shop</button></div>
-    <section id="accountGuest" class="account-guest-card"><div class="account-guest-art" aria-hidden="true">V</div><div><span class="vine-eyebrow">WELCOME TO VINE</span><h2>Your shopping, all in one place.</h2><p>Sign in to view your profile, saved addresses and order history across Vine's connected services.</p><div class="account-guest-actions"><button class="account-primary-btn" id="accountGuestSignIn" type="button">Sign in</button><button class="storefront-outline-btn" id="accountGuestCreate" type="button">Create account</button></div><p class="account-auth-note">You can browse and save items on this device before signing in. Rewards and coupons will appear here once those features are active.</p></div></section>
+    <div class="storefront-page-heading"><div><span class="vine-eyebrow">YOUR VINE SPACE</span><h1 id="accountPageTitle">Your account</h1><p>Manage your profile, addresses, orders, saved products, reviews and product questions.</p></div><button type="button" class="storefront-outline-btn" onclick="navigateView('home')">← Back to shop</button></div>
+    <section id="accountGuest" class="account-guest-card"><div class="account-guest-art" aria-hidden="true">V</div><div><span class="vine-eyebrow">WELCOME TO VINE</span><h2>Your shopping, all in one place.</h2><p>Sign in to view your profile, saved addresses and order history across Vine's connected services.</p><div class="account-guest-actions"><button class="account-primary-btn" id="accountGuestSignIn" type="button">Sign in</button><button class="storefront-outline-btn" id="accountGuestCreate" type="button">Create account</button></div><p class="account-auth-note">Saved products sync to your account after you sign in. Your order history, reviews and product questions are available here too.</p></div></section>
     <div id="accountDashboard" hidden>
       <section class="account-profile-hero"><div class="account-avatar" id="accountAvatar">V</div><div class="account-profile-copy"><span class="account-profile-label">VINE CUSTOMER</span><h2 id="accountDisplayName">Welcome back</h2><p id="accountDisplayEmail">Loading your account…</p><span class="account-member-chip"><span></span> Account connected</span></div><button type="button" id="accountSignOutTop" class="account-quiet-btn">Sign out</button></section>
-      <div class="account-stat-grid"><button class="account-stat-card" type="button" data-account-target="orders"><span class="account-stat-icon">▤</span><span class="account-stat-value" id="accountOrderCount">—</span><span class="account-stat-label">Your orders</span></button><button class="account-stat-card" type="button" data-account-target="saved"><span class="account-stat-icon">♡</span><span class="account-stat-value" id="accountSavedCount">—</span><span class="account-stat-label">Saved finds</span></button><button class="account-stat-card" type="button" data-account-target="addresses"><span class="account-stat-icon">⌖</span><span class="account-stat-value" id="accountAddressCount">—</span><span class="account-stat-label">Addresses</span></button><div class="account-stat-card account-stat-coming"><span class="account-stat-icon">◈</span><span class="account-stat-value">Coming soon</span><span class="account-stat-label">Vine credit</span></div><div class="account-stat-card account-stat-coming"><span class="account-stat-icon">✦</span><span class="account-stat-value">Coming soon</span><span class="account-stat-label">Coupons & offers</span></div></div>
-      <nav class="account-shortcuts" aria-label="Account sections"><button type="button" data-account-target="profile">◉ <span>Profile</span></button><button type="button" data-account-target="orders">▤ <span>Orders</span></button><button type="button" data-account-target="addresses">⌖ <span>Addresses</span></button><button type="button" data-account-target="saved">♡ <span>Saved finds</span></button><button type="button" data-account-target="rewards">✦ <span>Rewards</span></button></nav>
+      <div class="account-stat-grid"><button class="account-stat-card" type="button" data-account-target="orders"><span class="account-stat-icon">▤</span><span class="account-stat-value" id="accountOrderCount">—</span><span class="account-stat-label">Your orders</span></button><button class="account-stat-card" type="button" data-account-target="saved"><span class="account-stat-icon">♡</span><span class="account-stat-value" id="accountSavedCount">—</span><span class="account-stat-label">Saved finds</span></button><button class="account-stat-card" type="button" data-account-target="addresses"><span class="account-stat-icon">⌖</span><span class="account-stat-value" id="accountAddressCount">—</span><span class="account-stat-label">Addresses</span></button></div>
+      <nav class="account-shortcuts" aria-label="Account sections"><button type="button" data-account-target="profile">◉ <span>Profile</span></button><button type="button" data-account-target="orders">▤ <span>Orders</span></button><button type="button" data-account-target="addresses">⌖ <span>Addresses</span></button><button type="button" data-account-target="saved">♡ <span>Saved finds</span></button><button type="button" data-account-target="reviews">☆ <span>Reviews</span></button><button type="button" data-account-target="questions">? <span>Questions</span></button></nav>
       <div id="accountFeedback" class="account-feedback" role="status" hidden></div>
       <div class="account-content-grid">
         <section id="accountProfilePanel" class="account-content-card account-profile-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR DETAILS</span><h3>Profile information</h3><p>Keep your contact details up to date.</p></div><span class="account-card-symbol">◉</span></div><form id="accountProfileForm" class="account-form"><label>Full name<input id="accountFullName" name="fullName" autocomplete="name" maxlength="120" required></label><label>Email address<input id="accountEmail" type="email" disabled></label><label>Phone number<input id="accountPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="Add a phone number"></label><button class="account-primary-btn" id="accountSaveProfile" type="submit">Save profile</button></form></section>
         <section id="accountOrdersPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">PURCHASE HISTORY</span><h3>Your orders</h3><p>Order and payment status returned by Vine's Store API.</p></div><button type="button" class="storefront-text-btn" id="accountRefreshOrders">Refresh</button></div><div id="accountOrdersList" class="account-order-list"><div class="account-inline-loading">Loading order history…</div></div></section>
         <section id="accountAddressesPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">DELIVERY DETAILS</span><h3>Saved addresses</h3><p>Reuse these details during checkout.</p></div><span class="account-card-symbol">⌖</span></div><div id="accountAddressesList" class="account-address-list"><div class="account-inline-loading">Loading saved addresses…</div></div><details class="account-add-address"><summary>＋ Add a new address</summary><form id="accountAddressForm" class="account-form address-form"><label>Recipient name<input id="addrRecipient" required maxlength="120" autocomplete="name"></label><label>Phone number<input id="addrPhone" required maxlength="30" inputmode="tel" autocomplete="tel"></label><label class="address-form-wide">Street address<input id="addrLine1" required maxlength="240" autocomplete="address-line1"></label><label class="address-form-wide">Apartment, hostel or extra address <span>(optional)</span><input id="addrLine2" maxlength="240" autocomplete="address-line2"></label><label>City / town<input id="addrCity" required maxlength="100" autocomplete="address-level2"></label><label>State / FCT<input id="addrState" required maxlength="100" autocomplete="address-level1"></label><label>Postal code <span>(optional)</span><input id="addrPostal" maxlength="20" autocomplete="postal-code"></label><label>Landmark <span>(optional)</span><input id="addrLandmark" maxlength="200"></label><label class="address-default-check"><input id="addrDefault" type="checkbox"> Set as my default address</label><button type="submit" class="account-primary-btn" id="accountSaveAddress">Save address</button></form></details></section>
-        <section id="accountSavedPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR COLLECTION</span><h3>Saved finds</h3><p>Favourites saved on this device.</p></div><button type="button" class="storefront-text-btn" onclick="navigateView('home')">Explore products</button></div><div id="accountSavedGrid" class="account-saved-grid"></div></section>
-        <section class="account-content-card account-wide-panel account-coming-features"><div class="account-card-heading"><div><span class="account-card-kicker">MORE FROM VINE</span><h3>Messages, reviews and more</h3><p>These sections will become available when their service is integrated. Vine does not display fake notifications or review history.</p></div><span class="account-card-symbol">✦</span></div><div class="account-feature-grid"><button type="button" data-coming-feature="messages"><span class="account-feature-icon">▢</span><strong>Messages</strong><small>Not active yet</small></button><button type="button" data-coming-feature="reviews"><span class="account-feature-icon">☆</span><strong>Reviews</strong><small>Not active yet</small></button><button type="button" data-coming-feature="following"><span class="account-feature-icon">♡</span><strong>Following</strong><small>Not active yet</small></button><button type="button" data-coming-feature="play"><span class="account-feature-icon">✦</span><strong>Play & Earn</strong><small>Not active yet</small></button></div></section>
-        <section id="accountRewardsPanel" class="account-content-card rewards-coming-panel"><div class="rewards-coming-icon">✦</div><div><span class="account-card-kicker">COMING TO VINE</span><h3>Coupons, offers and rewards</h3><p>We will show real eligible offers here when the rewards system is connected. No placeholder balance or invented coupon count is displayed.</p></div></section>
+        <section id="accountSavedPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR COLLECTION</span><h3>Saved finds</h3><p>Saved products linked to your signed-in Vine account.</p></div><button type="button" class="storefront-text-btn" onclick="navigateView('home')">Explore products</button></div><div id="accountSavedGrid" class="account-saved-grid"></div></section>
+        <section id="accountReviewsPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR FEEDBACK</span><h3>Your product reviews</h3><p>Reviews you have submitted for products purchased through Vine.</p></div></div><div id="accountReviewsList" class="account-history-list"><div class="account-inline-loading">Loading your reviews…</div></div></section>
+        <section id="accountQuestionsPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">PRODUCT HELP</span><h3>Your product questions</h3><p>Track questions you asked and read the answers from Vine.</p></div></div><div id="accountQuestionsList" class="account-history-list"><div class="account-inline-loading">Loading your questions…</div></div></section>
       </div>
       <div class="account-bottom-signout"><button type="button" id="accountSignOutBottom" class="storefront-outline-btn">Sign out of Vine</button></div>
     </div>
   </div>
 </section>
 
-<footer id="homeFooter" class="vine-mini-footer"><div class="wrap"><span>VINE</span><small>Great finds. Great prices.</small><small>© <span id="year">2026</span> Vine</small></div></footer>
+<footer id="homeFooter" class="vine-mini-footer"><div class="wrap"><span id="footerStoreName">VINE</span><small id="footerTagline">Great finds. Great prices.</small><small id="footerSupportContacts" class="footer-support-contacts" hidden></small><small>© <span id="year">2026</span> <span id="footerCopyrightName">Vine</span></small></div></footer>
+<section id="storePolicyFooter" class="store-policy-footer" hidden><div class="wrap"><div id="storePolicyLinks" class="store-policy-links"></div></div></section>
+<dialog id="storePolicyDialog" class="store-policy-dialog" aria-labelledby="storePolicyDialogTitle"><div class="store-policy-dialog-head"><h2 id="storePolicyDialogTitle">Store policy</h2><button type="button" id="storePolicyClose" aria-label="Close policy">×</button></div><div id="storePolicyDialogBody" class="store-policy-dialog-body"></div></dialog>
 <div class="quick-modal-backdrop" id="quickModalBackdrop" role="dialog" aria-modal="true" aria-label="Product details and reviews">
   <div class="quick-modal product-detail-modal" id="quickModal">
     <button class="quick-modal-close" id="quickModalClose" aria-label="Close product details">×</button>
@@ -581,7 +590,6 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 <div class="vine-modal-backdrop" id="authBackdrop" role="dialog" aria-modal="true" aria-labelledby="authTitle">
   <section class="vine-modal">
     <div class="vine-modal-head"><div><h3 id="authTitle">Your Vine account</h3><p id="authSubtitle">Sign in to save your details and place an order.</p></div><button type="button" class="vine-modal-close" id="authClose" aria-label="Close account">×</button></div>
-    <div id="apiSetupHint" class="vine-setup-note">Vine's APIs are not connected on this copy yet. After the Render services are set up, add their public base URLs to <code>window.VINE_CONFIG</code>. Do not put secret keys in this page.</div>
     <div id="accountSignedIn" hidden>
       <div class="vine-account-details"><p><strong>Signed in</strong></p><p id="signedInEmail"></p><p class="vine-small-print">Your session is limited to this browser tab session.</p></div>
       <button type="button" class="vine-form-submit" id="authLogout">Sign out</button>
@@ -780,6 +788,7 @@ window.VineSupabaseAuth = (function () {
       return (await request(storeBase, `/api/v1/products?${params.toString()}`)).data;
     },
     async categories() { return (await request(storeBase, '/api/v1/categories')).data; },
+    async storefrontConfig() { return (await request(storeBase, '/api/v1/storefront/config')).data; },
     async productBySlug(slug) { return (await request(storeBase, `/api/v1/products/${encodeURIComponent(slug)}`)).data; },
     async productReviews(slug, { sort = 'newest', page = 1, limit = 8, rating = 'all', photosOnly = false } = {}) {
       const params = new URLSearchParams({ sort, page: String(page), limit: String(limit) });
@@ -819,6 +828,12 @@ window.VineSupabaseAuth = (function () {
       const params = new URLSearchParams({ reference });
       return (await request(operationsBase, `/api/v1/payments/status?${params.toString()}`, {}, true)).data;
     },
+    async favorites() { return (await request(storeBase, '/api/v1/me/favorites', {}, true)).data; },
+    async saveFavorite(productId) { return (await request(storeBase, `/api/v1/me/favorites/${encodeURIComponent(productId)}`, { method: 'PUT' }, true)).data; },
+    async syncFavorites(productIds) { return (await request(storeBase, '/api/v1/me/favorites/sync', { method: 'POST', body: JSON.stringify({ productIds }) }, true)).data; },
+    async removeFavorite(productId) { await request(storeBase, `/api/v1/me/favorites/${encodeURIComponent(productId)}`, { method: 'DELETE' }, true); return true; },
+    async myReviews() { return (await request(storeBase, '/api/v1/me/reviews?limit=100', {}, true)).data; },
+    async myQuestions() { return (await request(storeBase, '/api/v1/me/questions?limit=100', {}, true)).data; },
     async myOrders() { return (await request(storeBase, '/api/v1/me/orders', {}, true)).data; }
   };
   global.VineAPI = api;
@@ -833,7 +848,7 @@ let activeCategories=[];
 let catalogueSearchTimer=null;
 function loadVineState(key,fallback){try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw):fallback}catch(e){return fallback}}
 function saveVineState(key,value){try{localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
-const cart=loadVineState("vine_cart_v3",{});const saved=new Set((loadVineState("vine_saved_v3",[])||[]).map(String));let selectedCartIds=loadVineState("vine_cart_selected_v1",null);if(Array.isArray(selectedCartIds))selectedCartIds=[...new Set(selectedCartIds.map(String))];else selectedCartIds=null;
+let liveStoreConfig=null;const cart=loadVineState("vine_cart_v3",{});const saved=new Set((loadVineState("vine_saved_v3",[])||[]).map(String));let selectedCartIds=loadVineState("vine_cart_selected_v1",null);if(Array.isArray(selectedCartIds))selectedCartIds=[...new Set(selectedCartIds.map(String))];else selectedCartIds=null;
 const money=n=>"₦"+n.toLocaleString("en-NG");
 function safeText(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function productById(id){return products.find(p=>String(p.id)===String(id))||productCache.get(String(id))||null}
@@ -1035,10 +1050,9 @@ async function loadVineCatalogue(options={}){
  }catch(error){if(requestId!==catalogueRequestId)return;catalogueStatus="offline";catalogueError=error?.message||"The live catalogue is temporarily unavailable.";products.splice(0,products.length);catalogueTotal=0;catalogueHasMore=false;renderProducts();updateCart();}
 }
 async function handlePaymentReturn(){const params=new URLSearchParams(location.search);const reference=params.get("reference");if(!reference)return;openAccount();setAuthMessage("Checking the order status with Vine…");if(!window.VineAPI?.isSignedIn()){setAuthMessage("The payment return was received. Sign in with the same account to check your order status.");return}if(history.replaceState)history.replaceState({},document.title,location.pathname+location.hash);let attempts=0;while(attempts<12){attempts++;try{const result=await window.VineAPI.paymentStatus(reference);if(result.paymentStatus==="paid"){const completedPending=pendingCheckout();savePendingCheckout(null);if(completedPending?.cartSnapshot){completedPending.cartSnapshot.forEach(item=>delete cart[String(item.productId)]);if(Array.isArray(selectedCartIds))selectedCartIds=selectedCartIds.filter(id=>Number(cart[id]||0)>0);saveCartSelection()}updateCart();setAuthMessage(`Payment confirmed for ${result.orderNumber}. Thank you for shopping with Vine.`);return}if(result.paymentStatus==="review_required"||result.orderStatus==="payment_review"){setAuthMessage(`Order ${result.orderNumber} needs a manual payment review. Please do not pay again; contact Vine support with the order number.`,true);return}setAuthMessage(`Order ${result.orderNumber} is ${result.paymentStatus}. Vine is waiting for verified confirmation. We will keep checking for a short time.`)}catch(err){setAuthMessage(err.message,true);return}await new Promise(resolve=>setTimeout(resolve,4000))}setAuthMessage("Vine has not received final payment confirmation yet. Do not pay again. Your order will appear in your order history when the provider webhook is processed.")}
-setupAuthView();updateAccountButton();updatePendingCheckoutView();
+setupAuthView();updateAccountButton();updatePendingCheckoutView();loadStorefrontRuntimeConfig();
 try{const cached=loadVineState("vine_catalogue_cache_v1",[]);if(Array.isArray(cached))cached.forEach(p=>{if(p&&p.id)productCache.set(String(p.id),p)});}catch{}
 renderProducts();updateCart();loadVineCategories();loadVineCatalogue().then(()=>openSharedProductFromUrl());handlePaymentReturn();
-const legacyNewsletterForm=document.getElementById("newsletterForm");if(legacyNewsletterForm)legacyNewsletterForm.addEventListener("submit",e=>{e.preventDefault();showToast("Newsletter signup is not enabled yet.");e.target.reset()});
 const legacyMenuBtn=document.getElementById("menuBtn");if(legacyMenuBtn)legacyMenuBtn.addEventListener("click",()=>document.getElementById("categories").scrollIntoView({behavior:"smooth"}));
 if(document.getElementById("year"))document.getElementById("year").textContent=new Date().getFullYear();
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDetailImageLightbox();closeCart();closeQuickView()}else if(e.key==='ArrowLeft'&&!$v('detailImageLightbox').hidden){setDetailImage(detailImageIndex-1)}else if(e.key==='ArrowRight'&&!$v('detailImageLightbox').hidden){setDetailImage(detailImageIndex+1)}});
@@ -1062,7 +1076,7 @@ function navigateView(view){
   currentView=view;
   const map={home:"homeView",categories:"categoriesView",cart:"cartView",account:"accountView"};
   for(const [key,id] of Object.entries(map)){const el=$v(id);if(el)el.hidden=key!==view;}
-  const footer=$v("homeFooter");if(footer)footer.hidden=view!=="home";
+  const footer=$v("homeFooter");if(footer)footer.hidden=view!=="home";const legal=$v("storePolicyFooter");if(legal)legal.hidden=view!=="home";
   setMobileActive(view);
   document.body.style.overflow="";
   window.scrollTo({top:0,behavior:"auto"});
@@ -1156,6 +1170,7 @@ function renderCartPage(){
   const selected=currentSelectedCartIds();const selectedSet=new Set(selected);const known=rawRows.filter(r=>r.p);const selectedRows=known.filter(r=>selectedSet.has(r.id));
   const selectedQuantity=selectedRows.reduce((sum,r)=>sum+r.q,0),selectedSubtotal=selectedRows.reduce((sum,r)=>sum+Number(r.p.price||0)*r.q,0),totalQuantity=rawRows.reduce((sum,r)=>sum+r.q,0);
   $v("cartPageCount").textContent=`(${totalQuantity})`;$v("cartSummaryCount").textContent=`${selectedQuantity} ${selectedQuantity===1?"item":"items"}`;$v("cartSummarySubtotal").textContent=money(selectedSubtotal);$v("cartSummaryTotal").textContent=money(selectedSubtotal);
+  const deliveryLabel=$v("cartSummaryDeliveryLabel");if(deliveryLabel){const shipping=liveStoreConfig?.shipping;if(!shipping?.pricingConfigured)deliveryLabel.textContent="Confirmed before order";else if(shipping.freeShippingEnabled&&selectedSubtotal>=Number(shipping.freeShippingThresholdNgn||0))deliveryLabel.textContent="Free";else if(shipping.freeShippingEnabled&&Number(shipping.freeShippingThresholdNgn||0)>selectedSubtotal)deliveryLabel.textContent=`${money(Number(shipping.baseFeeNgn||0))} · Free over ${money(Number(shipping.freeShippingThresholdNgn))}`;else deliveryLabel.textContent=money(Number(shipping.baseFeeNgn||0));}
   const selectAll=$v("cartSelectAll");if(selectAll){selectAll.checked=rawRows.length>0&&rawRows.every(r=>selectedSet.has(r.id));selectAll.indeterminate=rawRows.some(r=>selectedSet.has(r.id))&&!selectAll.checked;selectAll.disabled=!rawRows.length;}
   const checkout=$v("cartPageCheckout");checkout.disabled=!selectedRows.length;checkout.innerHTML=`Checkout selected items (${selectedQuantity}) <span aria-hidden="true">→</span>`;
   if(!rawRows.length){container.innerHTML='<div class="cart-page-empty"><div class="empty-icon">🛍️</div><strong>Your bag is ready for something good.</strong><p>Explore Vine and add products you love. Your items will be collected here.</p><button type="button" class="account-primary-btn" onclick="navigateView(\'home\')">Explore products</button></div>';return;}
@@ -1173,7 +1188,7 @@ function accountStatus(value){const s=String(value||"unknown").toLowerCase();con
 function accountInitials(name,email){const bits=String(name||email||"Vine customer").trim().split(/[\s@._-]+/).filter(Boolean);return bits.slice(0,2).map(s=>s[0]).join("").toUpperCase()||"V";}
 function setAccountGuest(signed){$v("accountGuest").hidden=!!signed;$v("accountDashboard").hidden=!signed;}
 function launchCustomerAuth(mode){authMode=mode||"login";setAuthMessage("");setupAuthView();showModal("authBackdrop");}
-function accountScrollTo(section){const ids={profile:"accountProfilePanel",orders:"accountOrdersPanel",addresses:"accountAddressesPanel",saved:"accountSavedPanel",rewards:"accountRewardsPanel"};const el=$v(ids[section]||ids.profile);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});}
+function accountScrollTo(section){const ids={profile:"accountProfilePanel",orders:"accountOrdersPanel",addresses:"accountAddressesPanel",saved:"accountSavedPanel",reviews:"accountReviewsPanel",questions:"accountQuestionsPanel"};const el=$v(ids[section]||ids.profile);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});}
 async function loadAccountDashboard(){
   const requestId=++accountRequestId;
   const signed=Boolean(window.VineAPI?.isSignedIn());setAccountGuest(signed);
@@ -1181,10 +1196,11 @@ async function loadAccountDashboard(){
   if(accountBusy){$v("accountOrderCount").textContent="…";}
   accountBusy=true;$v("accountDisplayName").textContent="Loading your account…";$v("accountDisplayEmail").textContent=window.VineAPI.getSession()?.user?.email||"";
   $v("accountOrdersList").innerHTML='<div class="account-inline-loading">Loading order history…</div>';$v("accountAddressesList").innerHTML='<div class="account-inline-loading">Loading saved addresses…</div>';
-  const results=await Promise.allSettled([window.VineAPI.profile(),window.VineAPI.addresses(),window.VineAPI.myOrders()]);
+  $v("accountReviewsList").innerHTML='<div class="account-inline-loading">Loading your reviews…</div>';$v("accountQuestionsList").innerHTML='<div class="account-inline-loading">Loading your questions…</div>';
+  const results=await Promise.allSettled([window.VineAPI.profile(),window.VineAPI.addresses(),window.VineAPI.myOrders(),syncSavedProductsFromAccount(),window.VineAPI.myReviews(),window.VineAPI.myQuestions()]);
   if(requestId!==accountRequestId)return;
   accountBusy=false;
-  const profileResult=results[0],addressesResult=results[1],ordersResult=results[2];
+  const profileResult=results[0],addressesResult=results[1],ordersResult=results[2],favoritesResult=results[3],reviewsResult=results[4],questionsResult=results[5];
   accountProfile=profileResult.status==="fulfilled"?profileResult.value:null;
   accountAddresses=addressesResult.status==="fulfilled"&&Array.isArray(addressesResult.value)?addressesResult.value:[];
   accountOrders=ordersResult.status==="fulfilled"&&Array.isArray(ordersResult.value)?ordersResult.value:[];
@@ -1193,11 +1209,13 @@ async function loadAccountDashboard(){
   $v("accountFullName").value=accountProfile?.full_name||(name==="Vine customer"?"":name);
   $v("accountEmail").value=email;$v("accountPhone").value=accountProfile?.phone||"";
   $v("accountOrderCount").textContent=ordersResult.status==="fulfilled"?String(accountOrders.length):"—";
-  $v("accountSavedCount").textContent=String(saved.size);
+  $v("accountSavedCount").textContent=favoritesResult.status==="fulfilled"?String(saved.size):"—";
   $v("accountAddressCount").textContent=addressesResult.status==="fulfilled"?String(accountAddresses.length):"—";
   renderAccountOrders(ordersResult.status==="rejected"?ordersResult.reason:null);
   renderAccountAddresses(addressesResult.status==="rejected"?addressesResult.reason:null);
   renderAccountSavedProducts();
+  renderAccountReviews(reviewsResult.status==="fulfilled"?reviewsResult.value:[],reviewsResult.status==="rejected"?reviewsResult.reason:null);
+  renderAccountQuestions(questionsResult.status==="fulfilled"?questionsResult.value:[],questionsResult.status==="rejected"?questionsResult.reason:null);
   const failed=results.filter(r=>r.status==="rejected");
   if(failed.length)accountMessage(`Some account details could not load. ${failed.map(r=>r.reason?.message||"Please retry.").join(" ")}`,true);
   else accountMessage("");
@@ -1207,6 +1225,29 @@ function renderAccountOrders(error){
   if(!accountOrders.length){el.innerHTML='<div class="account-inline-empty">No orders yet. Products you purchase through Vine will appear here after the Store API records your order.<br><button type="button" class="storefront-outline-btn" style="margin-top:9px" onclick="navigateView(\'home\')">Start shopping</button></div>';return;}
   el.innerHTML=accountOrders.map(o=>`<article class="account-order-card"><span class="account-order-icon">▤</span><div class="account-order-main"><div class="account-order-top"><div><strong>${safeText(o.order_number||`Order ${String(o.id||"").slice(0,8)}`)}</strong><small>${safeText(accountFormatDate(o.created_at))} · ${safeText(o.currency||"NGN")}</small></div><span class="account-order-total">${money(Number(o.total_kobo||0)/100)}</span></div>${accountStatus(o.status)} <span style="display:inline-block">${accountStatus(o.payment_status)}</span></div></article>`).join("");
 }
+function renderAccountReviews(rows,error){
+ const el=$v("accountReviewsList");if(!el)return;
+ if(error){el.innerHTML=`<div class="account-inline-empty">Your reviews could not load. ${safeText(error.message||"Please retry.")}</div>`;return;}
+ if(!Array.isArray(rows)||!rows.length){el.innerHTML='<div class="account-inline-empty">You have not reviewed a Vine product yet. After you purchase and receive a product, open its details to leave a verified review.</div>';return;}
+ el.innerHTML=rows.map(r=>{const p=r.product||{};const status=String(r.status||'published');return `<article class="account-history-item">${p.imageUrl?`<img src="${safeText(p.imageUrl)}" alt="" loading="lazy" onerror="this.style.opacity='.15'">`:'<div class="account-history-image">▦</div>'}<div><h4>${safeText(p.name||'Vine product review')}</h4><div class="account-history-meta"><strong style="color:#d98b00">${'★'.repeat(Math.max(0,Math.min(5,Number(r.rating)||0)))}${'☆'.repeat(5-Math.max(0,Math.min(5,Number(r.rating)||0)))}</strong><span>${safeText(accountFormatDate(r.createdAt))}</span><span class="account-history-status ${safeText(status)}">${safeText(status)}</span>${r.verifiedPurchase?'<span>Verified purchase</span>':''}</div><p><strong>${safeText(r.title||'Your review')}</strong></p><p>${safeText(r.body||'')}</p>${r.imageUrls?.length?`<div class="account-history-meta">${r.imageUrls.length} review photo${r.imageUrls.length===1?'':'s'}</div>`:''}<div class="account-history-actions">${p.slug?`<button type="button" data-open-review-product="${safeText(p.slug)}">View product</button>`:''}</div></div></article>`}).join('');
+}
+function renderAccountQuestions(rows,error){
+ const el=$v("accountQuestionsList");if(!el)return;
+ if(error){el.innerHTML=`<div class="account-inline-empty">Your product questions could not load. ${safeText(error.message||"Please retry.")}</div>`;return;}
+ if(!Array.isArray(rows)||!rows.length){el.innerHTML='<div class="account-inline-empty">You have not asked a product question yet. Use “Ask a question” on a product page to contact the Vine team.</div>';return;}
+ el.innerHTML=rows.map(q=>{const p=q.product||{};const status=String(q.status||'pending');return `<article class="account-history-item">${p.imageUrl?`<img src="${safeText(p.imageUrl)}" alt="" loading="lazy" onerror="this.style.opacity='.15'">`:'<div class="account-history-image">?</div>'}<div><h4>${safeText(p.name||'Vine product question')}</h4><div class="account-history-meta"><span>${safeText(accountFormatDate(q.createdAt))}</span><span class="account-history-status ${safeText(status)}">${safeText(status)}</span>${q.verifiedPurchase?'<span>Verified purchase</span>':''}</div><p><strong>You asked</strong><br>${safeText(q.question||'')}</p>${q.answer?`<p><strong>Vine answered</strong><br>${safeText(q.answer)}</p>`:'<p>Vine has received your question. It will appear here when a team member answers.</p>'}<div class="account-history-actions">${p.slug?`<button type="button" data-open-question-product="${safeText(p.slug)}">View product</button>`:''}</div></div></article>`}).join('');
+}
+async function syncSavedProductsFromAccount(){
+ const localIds=[...saved].filter(id=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id))).map(String).slice(0,200);
+ if(localIds.length)await window.VineAPI.syncFavorites(localIds);
+ const fresh=await window.VineAPI.favorites();const favorites=Array.isArray(fresh?.favorites)?fresh.favorites:[];
+ saved.clear();
+ favorites.forEach(item=>{if(!item?.product?.id)return;const product=mapVineProduct(item.product);productCache.set(String(product.id),product);saved.add(String(product.id));});
+ saveVineState('vine_saved_v3',[...saved]);
+ if(currentView==='home')renderProducts();
+ return favorites;
+}
+
 function renderAccountAddresses(error){
   const el=$v("accountAddressesList");if(error){el.innerHTML=`<div class="account-inline-empty">Saved addresses could not load. ${safeText(error.message||"Please retry.")}</div>`;return;}
   if(!accountAddresses.length){el.innerHTML='<div class="account-inline-empty">No saved delivery addresses yet. Add an address below to make checkout faster.</div>';return;}
@@ -1242,6 +1283,38 @@ async function accountAddressAction(event){
   }catch(e){accountMessage(e.message||"Address could not be changed.",true)}finally{button.disabled=false;}
 }
 
+async function loadStorefrontRuntimeConfig(){
+ try{
+  const data=await window.VineAPI.storefrontConfig();liveStoreConfig=data||{};
+  const store=liveStoreConfig.storefront||{},seo=liveStoreConfig.seo||{},policies=liveStoreConfig.policies||{};
+  const storeName=String(store.storeName||"Vine").trim().slice(0,120)||"Vine";
+  const tagline=String(store.tagline||"Great finds. Great prices.").trim().slice(0,180);
+  $v("footerStoreName").textContent=storeName.toUpperCase();$v("footerCopyrightName").textContent=storeName;$v("footerTagline").textContent=tagline;
+  const support=$v("footerSupportContacts"),contactParts=[];support.replaceChildren();
+  if(store.supportEmail&&/^\S+@\S+\.\S+$/.test(store.supportEmail)){const a=document.createElement("a");a.href="mailto:"+store.supportEmail;a.textContent=store.supportEmail;support.append(a);contactParts.push(a);}
+  if(store.supportPhone){const phone=String(store.supportPhone).replace(/[^+0-9]/g,"");if(phone){if(support.childNodes.length)support.append(document.createTextNode(" · "));const a=document.createElement("a");a.href="tel:"+phone;a.textContent=String(store.supportPhone).slice(0,60);support.append(a);contactParts.push(a);}}
+  support.hidden=!contactParts.length;
+  const announcement=$v("storeAnnouncement");if(store.announcementEnabled&&String(store.announcementText||"").trim()){announcement.textContent=String(store.announcementText).slice(0,1000);announcement.hidden=false;}else{announcement.textContent="";announcement.hidden=true;}
+  if(seo.title){document.title=String(seo.title).slice(0,180);}
+  let description=document.querySelector('meta[name="description"]');if(!description){description=document.createElement("meta");description.name="description";document.head.append(description);}description.content=String(seo.description||"").slice(0,320);
+  let canonical=document.querySelector('link[rel="canonical"]');if(seo.canonicalUrl){if(!canonical){canonical=document.createElement("link");canonical.rel="canonical";document.head.append(canonical);}canonical.href=seo.canonicalUrl;}
+  const labels={returnsPolicy:"Returns & refunds",privacyPolicy:"Privacy policy",termsOfService:"Terms of service",shippingPolicy:"Shipping policy"};
+  const links=$v("storePolicyLinks");links.replaceChildren();let count=0;
+  for(const [key,label] of Object.entries(labels)){const text=String(policies[key]||"").trim();if(!text)continue;const button=document.createElement("button");button.type="button";button.dataset.storePolicy=key;button.textContent=label;links.append(button);count++;}
+  $v("storePolicyFooter").hidden=count===0;
+  if(currentView==="cart")renderCartPage();
+ }catch(error){
+  // Catalogue and shopping remain available if the optional public settings read fails;
+  // never present unsaved owner edits as active configuration.
+  liveStoreConfig=null;
+  console.warn("Vine storefront configuration is currently unavailable.");
+ }
+}
+function openStorePolicy(key){const labels={returnsPolicy:"Returns & refunds",privacyPolicy:"Privacy policy",termsOfService:"Terms of service",shippingPolicy:"Shipping policy"};const value=String(liveStoreConfig?.policies?.[key]||"").trim();if(!labels[key]||!value)return;const dialog=$v("storePolicyDialog");$v("storePolicyDialogTitle").textContent=labels[key];$v("storePolicyDialogBody").textContent=value;if(typeof dialog.showModal==="function")dialog.showModal();else dialog.setAttribute("open","");}
+$v("storePolicyLinks").addEventListener("click",e=>{const button=e.target.closest("[data-store-policy]");if(button)openStorePolicy(button.dataset.storePolicy)});
+$v("storePolicyClose").addEventListener("click",()=>{const dialog=$v("storePolicyDialog");if(typeof dialog.close==="function")dialog.close();else dialog.removeAttribute("open")});
+$v("storePolicyDialog").addEventListener("click",e=>{if(e.target===$v("storePolicyDialog")){const d=$v("storePolicyDialog");if(typeof d.close==="function")d.close();else d.removeAttribute("open")}});
+
 // Wire category navigation, cart selection and account actions once the full views exist.
 $v("categorySideNav").addEventListener("click",e=>{const b=e.target.closest("[data-category-group]");if(b)chooseCategoryGroup(b.dataset.categoryGroup)});
 $v("fullCategoryGrid").addEventListener("click",e=>{const b=e.target.closest("[data-full-category]");if(b)loadCategoryPageProducts(b.dataset.fullCategory,false)});
@@ -1259,7 +1332,8 @@ $v("accountAddressForm").addEventListener("submit",createAccountAddress);
 $v("accountAddressesList").addEventListener("click",accountAddressAction);
 $v("accountRefreshOrders").addEventListener("click",refreshAccountOrders);
 $v("accountSavedGrid").addEventListener("click",()=>{const count=saved.size;$v("accountSavedCount").textContent=String(count)});
-document.querySelectorAll("[data-coming-feature]").forEach(b=>b.addEventListener("click",()=>showToast(`${b.querySelector("strong")?.textContent||"This feature"} is not active yet.`)));
+document.addEventListener('click',e=>{const review=e.target.closest('[data-open-review-product]'),question=e.target.closest('[data-open-question-product]');const slug=review?.dataset.openReviewProduct||question?.dataset.openQuestionProduct;if(slug){navigateView('home');const product=[...productCache.values()].find(p=>p.slug===slug);if(product)viewProduct(product.id);else window.VineAPI.productBySlug(slug).then(p=>{const mapped=mapVineProduct(p);productCache.set(String(mapped.id),mapped);viewProduct(mapped.id)}).catch(err=>showToast(err.message||'Product could not be opened.'));}});
+
 document.querySelectorAll("[data-account-target]").forEach(b=>b.addEventListener("click",()=>accountScrollTo(b.dataset.accountTarget)));
 $v("accountSignOutTop").addEventListener("click",signOutCustomer);
 $v("accountSignOutBottom").addEventListener("click",signOutCustomer);
@@ -1271,7 +1345,7 @@ const originalCategoryViewRenderer=renderCategoryUI;
 renderCategoryUI=function(){originalCategoryViewRenderer();if(currentView==="categories")renderFullCategoryView()};
 // Existing cart/product update functions now refresh the full cart view and the visible saved-items count.
 const originalToggleSaved=toggleSaved;
-toggleSaved=function(id){originalToggleSaved(id);if(currentView==="account"){renderAccountSavedProducts();$v("accountSavedCount").textContent=String(saved.size)}};
+toggleSaved=function(id){id=String(id);originalToggleSaved(id);if(window.VineAPI?.isSignedIn()){const savedNow=saved.has(id);(savedNow?window.VineAPI.saveFavorite(id):window.VineAPI.removeFavorite(id)).catch(error=>{accountMessage(error.message||'This saved product could not be synced to your account.',true);showToast('Saved items could not sync. Please try again.');});}if(currentView==="account"){renderAccountSavedProducts();$v("accountSavedCount").textContent=String(saved.size)}};
 const originalAddToCart=addToCart;
 addToCart=function(id){id=String(id);const before=Number(cart[id]||0);originalAddToCart(id);if(Number(cart[id]||0)>before&&Array.isArray(selectedCartIds)){selectedCartIds=[...new Set([...selectedCartIds,id])];saveCartSelection();if(currentView==="cart")renderCartPage()}};
 const originalChangeQty=changeQty;
