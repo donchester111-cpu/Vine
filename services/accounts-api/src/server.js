@@ -85,6 +85,26 @@ app.post('/api/v1/auth/login', authLimiter, asyncRoute(async (req, res) => {
   res.json({ data: { user: { id: data.user.id, email: data.user.email }, session: { accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: data.session.expires_at } } });
 }));
 
+// Passwordless sign-in for the private Vineger staff portal. The invitation creates
+// the Supabase identity and staff membership; this endpoint never creates accounts.
+app.post('/api/v1/staff/auth/request-link', authLimiter, asyncRoute(async (req, res) => {
+  const input = z.object({ email: emailSchema }).parse(req.body);
+  const redirectTo = String(process.env.VINE_STAFF_INVITE_REDIRECT_URL || 'https://vinestore.com.ng/vineger.html').trim();
+  const { error } = await authClient.auth.signInWithOtp({
+    email: input.email.trim().toLowerCase(),
+    options: {
+      shouldCreateUser: false,
+      emailRedirectTo: redirectTo
+    }
+  });
+  // Do not reveal whether an email belongs to an account or staff membership.
+  if (error) {
+    console.warn(JSON.stringify({ level: 'warn', event: 'staff_magic_link_request_failed', code: error.code || 'AUTH_EMAIL_ERROR' }));
+    throw new HttpError(503, 'STAFF_EMAIL_UNAVAILABLE', 'We could not send a sign-in link right now. Check email delivery settings or try again later.');
+  }
+  res.status(202).json({ data: { accepted: true, message: 'If this email belongs to a Vine staff account, a secure sign-in link will be sent.' } });
+}));
+
 app.post('/api/v1/auth/refresh', authLimiter, asyncRoute(async (req, res) => {
   const { refreshToken } = z.object({ refreshToken: z.string().min(20).max(4096) }).parse(req.body);
   const { data, error } = await authClient.auth.refreshSession({ refresh_token: refreshToken });

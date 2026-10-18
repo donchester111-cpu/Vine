@@ -114,6 +114,97 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
     if(error) throw new HttpError(503,'STAFF_LIST_FAILED','Staff list could not be loaded.');
     const rows=await Promise.all((data||[]).map(async row=>{const {data:u}=await accountsAdmin.auth.admin.getUserById(row.user_id);return {...row,email:u?.user?.email||'',fullName:u?.user?.user_metadata?.full_name||''};}));res.json({data:rows});
   }));
+  const settingKeys = new Set(['storefront','commerce','shipping','payments','notifications','security','seo','policies','marketing','integrations']);
+  const assertSafeSettings = (value) => {
+    const visit = (node, path = '') => {
+      if (!node || typeof node !== 'object') return;
+      for (const [key, child] of Object.entries(node)) {
+        if (/(secret|password|service.?role|api.?key|private.?key|access.?token|refresh.?token)/i.test(key)) {
+          throw new HttpError(400, 'SECRET_NOT_ALLOWED', `Secrets are not permitted in store settings (${path}${key}). Set secrets in the service environment instead.`);
+        }
+        visit(child, `${path}${key}.`);
+      }
+    };
+    visit(value);
+    if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 24576) {
+      throw new HttpError(413, 'SETTINGS_TOO_LARGE', 'A settings group must be 24 KB or smaller.');
+    }
+  };
+
+  app.get('/api/v1/owner/settings', ...owner, asyncRoute(async (req, res) => {
+    const { data, error } = await accountsAdmin.from('vineowner_settings')
+      .select('setting_key,setting_value,updated_at').order('setting_key');
+    if (error) throw new HttpError(503, 'SETTINGS_UNAVAILABLE', 'Owner settings could not be loaded. Apply the Vineowner settings migration.');
+    const settings = Object.fromEntries((data || []).map(row => [row.setting_key, row.setting_value]));
+    res.json({ data: { settings, updatedAt: Object.fromEntries((data || []).map(row => [row.setting_key, row.updated_at])) } });
+  }));
+
+  app.put('/api/v1/owner/settings/:key', ...owner, asyncRoute(async (req, res) => {
+    const key = String(req.params.key || '');
+    if (!settingKeys.has(key)) throw new HttpError(404, 'SETTING_GROUP_NOT_FOUND', 'That settings group is not supported.');
+    const input = z.object({ value: z.record(z.string(), z.any()) }).strict().parse(req.body);
+    assertSafeSettings(input.value);
+    const { data, error } = await accountsAdmin.from('vineowner_settings').upsert({
+      setting_key: key, setting_value: input.value, updated_by: req.user.id, updated_at: new Date().toISOString()
+    }, { onConflict: 'setting_key' }).select('setting_key,setting_value,updated_at').single();
+    if (error) throw new HttpError(503, 'SETTINGS_SAVE_FAILED', 'Settings could not be saved.');
+    await audit(req, 'settings.updated', 'settings', key, { settingKey: key, fieldCount: Object.keys(input.value).length });
+    res.json({ data: { key: data.setting_key, value: data.setting_value, updatedAt: data.updated_at } });
+  }));
+
+  app.get('/api/v1/owner/staff/:userId/permissions', ...owner, asyncRoute(async (req, res) => {
+    const userId = z.string().uuid().parse(req.params.userId);
+    const { data: member, error: memberError } = await accountsAdmin.from('staff_memberships')
+      .select('user_id,staff_roles(is_owner_role)').eq('user_id', userId).maybeSingle();
+    if (memberError) throw new HttpError(503, 'STAFF_LOOKUP_FAILED', 'Staff access could not be checked.');
+    if (!member) throw new HttpError(404, 'STAFF_NOT_FOUND', 'Staff membership was not found.');
+    const role = Array.isArray(member.staff_roles) ? member.staff_roles[0] : member.staff_roles;
+    if (role?.is_owner_role) throw new HttpError(403, 'OWNER_ACCESS_LOCKED', 'Individual overrides cannot be edited for the protected owner role.');
+    const { data: rows, error } = await accountsAdmin.from('staff_user_permissions')
+      .select('permission_id,effect,assigned_by,created_at').eq('user_id', userId).order('created_at');
+    if (error) throw new HttpError(503, 'STAFF_PERMISSION_READ_FAILED', 'Individual permission overrides could not be loaded.');
+    const ids = (rows || []).map(row => row.permission_id);
+    const { data: permissions, error: permissionError } = ids.length
+      ? await accountsAdmin.from('staff_permissions').select('id,permission_key,description').in('id', ids)
+      : { data: [], error: null };
+    if (permissionError) throw new HttpError(503, 'STAFF_PERMISSION_READ_FAILED', 'Permission definitions could not be loaded.');
+    const byId = new Map((permissions || []).map(row => [row.id, row]));
+    res.json({ data: { userId, overrides: (rows || []).map(row => ({ ...row, permission_key: byId.get(row.permission_id)?.permission_key || row.permission_id, description: byId.get(row.permission_id)?.description || '' })) } });
+  }));
+
+  app.put('/api/v1/owner/staff/:userId/permissions', ...owner, asyncRoute(async (req, res) => {
+    const userId = z.string().uuid().parse(req.params.userId);
+    const input = z.object({ overrides: z.array(z.object({ permissionId: z.string().uuid(), effect: z.enum(['allow','deny']) }).strict()).max(500) }).strict().parse(req.body);
+    if (userId === req.user.id) throw new HttpError(403, 'SELF_CHANGE_BLOCKED', 'You cannot set individual overrides for your own owner session.');
+    if (new Set(input.overrides.map(row => row.permissionId)).size !== input.overrides.length) {
+      throw new HttpError(400, 'DUPLICATE_PERMISSION', 'Each permission may only appear once in an override set.');
+    }
+    const { data: member, error: memberError } = await accountsAdmin.from('staff_memberships')
+      .select('user_id,staff_roles(is_owner_role)').eq('user_id', userId).maybeSingle();
+    if (memberError) throw new HttpError(503, 'STAFF_LOOKUP_FAILED', 'Staff access could not be checked.');
+    if (!member) throw new HttpError(404, 'STAFF_NOT_FOUND', 'Staff membership was not found.');
+    const role = Array.isArray(member.staff_roles) ? member.staff_roles[0] : member.staff_roles;
+    if (role?.is_owner_role) throw new HttpError(403, 'OWNER_ACCESS_LOCKED', 'Individual overrides cannot be edited for the protected owner role.');
+    const desiredIds = input.overrides.map(row => row.permissionId);
+    if (desiredIds.length) {
+      const { data: valid, error: validError } = await accountsAdmin.from('staff_permissions').select('id').in('id', desiredIds);
+      if (validError) throw new HttpError(503, 'PERMISSION_LOOKUP_FAILED', 'Permission definitions could not be checked.');
+      if ((valid || []).length !== desiredIds.length) throw new HttpError(400, 'INVALID_PERMISSION', 'One or more permissions do not exist.');
+      const rows = input.overrides.map(row => ({ user_id: userId, permission_id: row.permissionId, effect: row.effect, assigned_by: req.user.id }));
+      const { error: upsertError } = await accountsAdmin.from('staff_user_permissions').upsert(rows, { onConflict: 'user_id,permission_id' });
+      if (upsertError) throw new HttpError(503, 'STAFF_PERMISSION_SAVE_FAILED', 'Individual permission overrides could not be saved.');
+    }
+    const { data: existing, error: existingError } = await accountsAdmin.from('staff_user_permissions').select('permission_id').eq('user_id', userId);
+    if (existingError) throw new HttpError(503, 'STAFF_PERMISSION_SAVE_FAILED', 'Existing overrides could not be reconciled.');
+    const toRemove = (existing || []).map(row => row.permission_id).filter(id => !desiredIds.includes(id));
+    if (toRemove.length) {
+      const { error: deleteError } = await accountsAdmin.from('staff_user_permissions').delete().eq('user_id', userId).in('permission_id', toRemove);
+      if (deleteError) throw new HttpError(503, 'STAFF_PERMISSION_SAVE_FAILED', 'Old permission overrides could not be removed.');
+    }
+    await audit(req, 'staff.permissions.updated', 'staff', userId, { overrideCount: input.overrides.length });
+    res.json({ data: { userId, overrides: input.overrides, count: input.overrides.length } });
+  }));
+
   app.get('/api/v1/owner/audit', ...owner, asyncRoute(async(req,res)=>{
     const limit=Math.min(200,Math.max(1,Number(req.query.limit)||100));const {data,error}=await accountsAdmin.from('vineowner_audit_log').select('id,actor_user_id,action,target_type,target_id,details,created_at').order('created_at',{ascending:false}).limit(limit);
     if(error) throw new HttpError(503,'AUDIT_UNAVAILABLE','Audit log could not be loaded.');res.json({data});
