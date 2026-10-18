@@ -88,6 +88,55 @@ app.get('/api/v1/products/:slug', asyncRoute(async (req, res) => {
   res.json({ data: toPublicProduct(data) });
 }));
 
+// Product photos are uploaded through the Store API so only staff with catalogue permissions can write to Storage.
+// The public bucket allows storefront image reads; uploads and deletions remain server-side using service-role credentials.
+const productImageBucket = String(process.env.VINE_PRODUCT_IMAGES_BUCKET || 'vine-product-images').trim();
+const productImageBody = express.raw({ type: 'image/*', limit: '5mb' });
+const productImageTypes = new Map([
+  ['image/jpeg', { extension: 'jpg', signature: buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff }],
+  ['image/png', { extension: 'png', signature: buffer => buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])) }],
+  ['image/webp', { extension: 'webp', signature: buffer => buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP' }]
+]);
+
+app.post('/api/v1/admin/product-images', auth, catalogAdmin, productImageBody, asyncRoute(async (req, res) => {
+  const contentType = String(req.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const type = productImageTypes.get(contentType);
+  if (!type) throw new HttpError(415, 'PRODUCT_IMAGE_TYPE_UNSUPPORTED', 'Choose a JPG, PNG or WebP image.');
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new HttpError(400, 'PRODUCT_IMAGE_EMPTY', 'Choose a photo before uploading.');
+  if (!type.signature(req.body)) throw new HttpError(400, 'PRODUCT_IMAGE_INVALID', 'The selected file is not a valid image. Choose another photo.');
+  if (req.body.length > 5 * 1024 * 1024) throw new HttpError(413, 'PRODUCT_IMAGE_TOO_LARGE', 'The optimised photo must be 5 MB or smaller.');
+
+  const path = `products/${crypto.randomUUID()}.${type.extension}`;
+  const storage = productsDb.storage.from(productImageBucket);
+  const { error } = await storage.upload(path, req.body, { contentType, cacheControl: '31536000', upsert: false });
+  if (error) {
+    console.error(JSON.stringify({ level: 'error', service: process.env.SERVICE_NAME, action: 'product-image.upload.failed', requestId: req.id, code: error.code || 'STORAGE_ERROR' }));
+    throw new HttpError(503, 'PRODUCT_IMAGE_UPLOAD_FAILED', 'The photo could not be saved. Please try again. If the problem continues, ask the Vine administrator to check product photo storage.');
+  }
+  const imageUrl = storage.getPublicUrl(path)?.data?.publicUrl;
+  if (!imageUrl || !/^https:\/\//i.test(imageUrl)) {
+    await storage.remove([path]).catch(() => {});
+    throw new HttpError(503, 'PRODUCT_IMAGE_URL_FAILED', 'The photo was saved but its public link could not be created. Please try again.');
+  }
+  res.status(201).json({ data: { imageUrl, path, contentType, sizeBytes: req.body.length } });
+}));
+
+app.delete('/api/v1/admin/product-images', auth, catalogAdmin, asyncRoute(async (req, res) => {
+  const input = z.object({ path: z.string().trim().regex(/^products\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp)$/i) }).parse(req.body);
+  const storage = productsDb.storage.from(productImageBucket);
+  const imageUrl = storage.getPublicUrl(input.path)?.data?.publicUrl;
+  if (!imageUrl) throw new HttpError(400, 'PRODUCT_IMAGE_PATH_INVALID', 'That photo could not be identified.');
+  const [mainImage, galleryImage] = await Promise.all([
+    productsDb.from('products').select('id').eq('image_url', imageUrl).limit(1),
+    productsDb.from('products').select('id').contains('gallery_urls', [imageUrl]).limit(1)
+  ]);
+  if (mainImage.error || galleryImage.error) throw new HttpError(503, 'PRODUCT_IMAGE_REFERENCE_CHECK_FAILED', 'We could not safely check whether this photo is in use.');
+  if ((mainImage.data || []).length || (galleryImage.data || []).length) throw new HttpError(409, 'PRODUCT_IMAGE_IN_USE', 'This photo is already attached to a product and cannot be removed.');
+  const { error } = await storage.remove([input.path]);
+  if (error) throw new HttpError(503, 'PRODUCT_IMAGE_DELETE_FAILED', 'The unused photo could not be removed.');
+  res.status(204).end();
+}));
+
 // Private catalogue administration: never accept supplier costs from public customer routes.
 app.post('/api/v1/admin/categories', auth, catalogAdmin, asyncRoute(async (req, res) => {
   const input = z.object({ name: safeText(80), slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80), description: optionalText(500), sortOrder: z.number().int().min(0).max(10000).default(0) }).parse(req.body);
