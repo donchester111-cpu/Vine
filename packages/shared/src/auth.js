@@ -67,11 +67,20 @@ export function requireAuth(authClient) {
       // Invalid/custom tokens still fall through to normal Supabase customer authentication.
       const ownerClaims = verifyOwnerSessionToken(match[1]);
       if (ownerClaims) {
-        // Keep the custom owner credential scoped to Vineowner endpoints only; it must not
-        // behave as a general-purpose customer access token.
-        if (!req.path.startsWith('/api/v1/owner/') && req.path !== '/api/v1/auth/logout') {
-          throw new HttpError(403, 'OWNER_SESSION_SCOPE', 'This owner session cannot be used for that endpoint.');
-        }
+        // Owner sessions may access only the owner console and its explicitly enumerated
+        // server-side admin surfaces. They remain unusable for customer accounts, checkout,
+        // reviews, and payment endpoints. Each admin route still applies the shared staff RBAC.
+        const ownerAdminPrefixes = [
+          '/api/v1/admin/products', '/api/v1/admin/categories', '/api/v1/admin/suppliers',
+          '/api/v1/admin/supplier-products', '/api/v1/admin/orders', '/api/v1/admin/deliveries',
+          '/api/v1/admin/analytics/', '/api/v1/admin/notifications', '/api/v1/admin/questions',
+          '/api/v1/admin/product-images'
+        ];
+        const allowedOwnerPath = req.path.startsWith('/api/v1/owner/') ||
+          req.path === '/api/v1/auth/logout' || ownerAdminPrefixes.some(prefix =>
+            req.path === prefix || (prefix.endsWith('/') ? req.path.startsWith(prefix) : req.path.startsWith(`${prefix}/`))
+          );
+        if (!allowedOwnerPath) throw new HttpError(403, 'OWNER_SESSION_SCOPE', 'This owner session cannot be used for that endpoint.');
         const configuredEmail = String(process.env.VINE_OWNER_EMAIL || 'donchester111@gmail.com').trim().toLowerCase();
         const configuredId = String(process.env.VINE_OWNER_USER_ID || '').trim().toLowerCase();
         if (ownerClaims.email !== configuredEmail || !configuredId || ownerClaims.sub.toLowerCase() !== configuredId) {
