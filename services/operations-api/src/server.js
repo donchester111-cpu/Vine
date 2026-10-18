@@ -6,6 +6,7 @@ import { createAuthContext, createSupabaseClient } from '@vine/shared/db';
 import { requireAuth } from '@vine/shared/auth';
 import { requirePermission } from '@vine/shared/rbac';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
+import { escapeVineHtml, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
 import { clampInt, optionalText, safeText, uuidSchema } from '@vine/shared/validation';
 
 process.env.SERVICE_NAME = 'vine-operations-api';
@@ -74,6 +75,100 @@ async function enqueueOrderNotice(order, statusKey) {
     payload: { orderNumber: order.order_number, status: statusKey }, status: 'pending', available_at: new Date().toISOString()
   }, { onConflict: 'dedupe_key', ignoreDuplicates: true });
   if (error) console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, message: 'Notification job could not be queued', code: error.code }));
+}
+
+function safeNotificationErrorCode(error) {
+  const raw = String(error?.code || error?.name || 'NOTIFICATION_DELIVERY_FAILED').toUpperCase();
+  return raw.replace(/[^A-Z0-9_]/g, '_').slice(0, 80) || 'NOTIFICATION_DELIVERY_FAILED';
+}
+
+async function deliverNotificationJob(job) {
+  const currentAttempt = Number(job.attempts || 0) + 1;
+  const now = new Date().toISOString();
+  const { data: claimed, error: claimError } = await operationsDb.from('notification_jobs')
+    .update({ status: 'processing', attempts: currentAttempt, updated_at: now })
+    .eq('id', job.id).eq('status', 'pending')
+    .select('id,order_id,channel,template_key,recipient_ref,payload,attempts')
+    .maybeSingle();
+  if (claimError) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'notification_claim_failed', jobId: job.id, code: claimError.code || 'DB_ERROR' }));
+    return;
+  }
+  if (!claimed) return; // Another worker already claimed this job.
+
+  try {
+    if (claimed.channel !== 'email') throw new HttpError(422, 'NOTIFICATION_CHANNEL_NOT_CONFIGURED', 'Only email delivery is configured for this notification worker.');
+    const recipient = String(claimed.recipient_ref || '').trim();
+    if (!/^\S+@\S+\.\S+$/.test(recipient)) throw new HttpError(422, 'NOTIFICATION_RECIPIENT_INVALID', 'The saved message recipient is not a valid email address.');
+    const { data: order, error: orderError } = await ordersDb.from('orders')
+      .select('id,order_number,status,payment_status,total_kobo,currency,email')
+      .eq('id', claimed.order_id).maybeSingle();
+    if (orderError) throw new HttpError(503, 'NOTIFICATION_ORDER_LOOKUP_FAILED', 'The order details needed for this message could not be loaded.');
+    if (!order) throw new HttpError(404, 'NOTIFICATION_ORDER_NOT_FOUND', 'The order linked to this message no longer exists.');
+
+    let subject;
+    let heading;
+    let message;
+    if (claimed.template_key === 'customer.order_paid') {
+      if (order.payment_status !== 'paid') throw new HttpError(409, 'ORDER_NOT_CONFIRMED_PAID', 'The order is not confirmed as paid.');
+      subject = `Payment confirmed for Vine order ${order.order_number}`;
+      heading = 'Your payment is confirmed';
+      message = `Payment for order ${order.order_number} has been confirmed. Vine will keep you updated as your order moves through fulfilment.`;
+    } else if (claimed.template_key === 'customer.order_processing') {
+      if (order.payment_status !== 'paid' || !['processing','shipped','delivered'].includes(order.status)) throw new HttpError(409, 'ORDER_NOT_READY_FOR_FULFILMENT_NOTICE', 'The order is not in a paid fulfilment status.');
+      subject = `Vine order ${order.order_number} is being prepared`;
+      heading = 'Your order is being prepared';
+      message = `Order ${order.order_number} is being prepared for delivery. We will share further updates as its delivery progresses.`;
+    } else {
+      throw new HttpError(422, 'NOTIFICATION_TEMPLATE_NOT_CONFIGURED', 'This message template is not configured for delivery.');
+    }
+
+    await sendVineEmail({
+      to: recipient,
+      subject,
+      text: `${message}\n\nThank you for shopping with Vine.\nhttps://vinestore.com.ng`,
+      html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#173b28;max-width:560px;margin:0 auto"><h2 style="color:#087f45">${escapeVineHtml(heading)}</h2><p>${escapeVineHtml(message)}</p><p><a href="https://vinestore.com.ng" style="color:#087f45;font-weight:700">Open Vine</a></p><p style="font-size:12px;color:#64756a">This is an order update from Vine.</p></div>`,
+      idempotencyKey: `vine-notification:${claimed.id}`
+    });
+    const sentAt = new Date().toISOString();
+    const { error: sentError } = await operationsDb.from('notification_jobs')
+      .update({ status: 'sent', sent_at: sentAt, last_error_code: null, updated_at: sentAt })
+      .eq('id', claimed.id).eq('status', 'processing');
+    if (sentError) throw new HttpError(503, 'NOTIFICATION_STATUS_SAVE_FAILED', 'The email provider accepted the message, but Vine could not record its delivered status.');
+    await addAudit({ action: 'notification.sent', entityType: 'notification_job', entityId: claimed.id, metadata: { templateKey: claimed.template_key, provider: 'resend' } });
+  } catch (error) {
+    const errorCode = safeNotificationErrorCode(error);
+    const failedAt = new Date().toISOString();
+    const { error: failSaveError } = await operationsDb.from('notification_jobs')
+      .update({ status: 'failed', last_error_code: errorCode, updated_at: failedAt })
+      .eq('id', claimed.id).eq('status', 'processing');
+    console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'notification_delivery_failed', jobId: claimed.id, code: errorCode, statusSaveFailed: Boolean(failSaveError) }));
+  }
+}
+
+let notificationWorkerRunning = false;
+async function processNotificationQueue() {
+  if (!isVineEmailConfigured() || notificationWorkerRunning) return;
+  notificationWorkerRunning = true;
+  try {
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - 20 * 60 * 1000).toISOString();
+    const nowIso = now.toISOString();
+    const { error: recoveryError } = await operationsDb.from('notification_jobs')
+      .update({ status: 'pending', available_at: nowIso, last_error_code: 'WORKER_RESTART_RECOVERY', updated_at: nowIso })
+      .eq('status', 'processing').lt('updated_at', staleBefore);
+    if (recoveryError) console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'notification_recovery_failed', code: recoveryError.code || 'DB_ERROR' }));
+
+    const { data: jobs, error } = await operationsDb.from('notification_jobs')
+      .select('id,order_id,channel,template_key,recipient_ref,payload,attempts,available_at')
+      .eq('status', 'pending').lte('available_at', nowIso).order('available_at', { ascending: true }).limit(10);
+    if (error) throw new HttpError(503, 'NOTIFICATION_QUEUE_READ_FAILED', 'The notification queue could not be read.');
+    for (const job of jobs || []) await deliverNotificationJob(job);
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'notification_worker_failed', code: safeNotificationErrorCode(error) }));
+  } finally {
+    notificationWorkerRunning = false;
+  }
 }
 
 async function loadPaymentById(paymentId) {
@@ -258,16 +353,46 @@ app.post('/api/v1/admin/payments/:id/confirm-bank-transfer', auth, paymentAdmin,
   res.json({ data: { paymentId: payment.id, orderId: paidOrder.id, orderNumber: paidOrder.order_number, paymentStatus: 'paid' } });
 }));
 
+
+// Persisted delivery history is sourced from vine_operations and enriched from vine_orders_payments.
+app.get('/api/v1/admin/deliveries', auth, deliveryView, asyncRoute(async (req, res) => {
+  const limit = clampInt(req.query.limit, 100, 1, 100);
+  const status = String(req.query.status || '').trim().toLowerCase();
+  const allowedStatuses = ['pending','preparing','dispatched','in_transit','delivered','failed','returned','cancelled'];
+  if (status && !allowedStatuses.includes(status)) throw new HttpError(400, 'DELIVERY_STATUS_FILTER_INVALID', 'Choose a valid delivery status.');
+  let query = operationsDb.from('deliveries')
+    .select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,dispatched_at,delivered_at,created_by,created_at,updated_at')
+    .order('created_at', { ascending: false }).limit(limit);
+  if (status) query = query.eq('status', status);
+  const { data: deliveries, error } = await query;
+  if (error) throw new HttpError(503, 'DELIVERIES_UNAVAILABLE', 'Saved delivery records could not be loaded.');
+  const rows = deliveries || [];
+  if (!rows.length) return res.json({ data: [], total: 0, limit, status: status || 'all' });
+  const orderIds = [...new Set(rows.map(row => row.order_id).filter(Boolean))];
+  const { data: orderRows, error: ordersError } = await ordersDb.from('orders')
+    .select('id,order_number,email,status,payment_status,total_kobo,currency,created_at')
+    .in('id', orderIds);
+  if (ordersError) throw new HttpError(503, 'DELIVERY_ORDERS_UNAVAILABLE', 'Delivery records loaded, but their linked order details could not be loaded.');
+  const orderById = new Map((orderRows || []).map(order => [order.id, order]));
+  res.json({
+    data: rows.map(delivery => ({ ...delivery, order: orderById.get(delivery.order_id) || null })),
+    total: rows.length, limit, status: status || 'all'
+  });
+}));
+
 app.post('/api/v1/admin/deliveries', auth, deliveryAdmin, asyncRoute(async (req, res) => {
   const input = z.object({ orderId: uuidSchema, provider: optionalText(100), trackingCode: optionalText(120), estimatedDeliveryAt: z.string().datetime().optional(), note: optionalText(500) }).parse(req.body);
   const order = await loadOrderForPayment(input.orderId);
   if (order.payment_status !== 'paid' || !['paid','processing'].includes(order.status)) throw new HttpError(409, 'ORDER_NOT_READY_FOR_DELIVERY', 'Only paid orders can be prepared for delivery.');
-  const { data: existing } = await operationsDb.from('deliveries').select('id,order_id,status').eq('order_id', order.id).maybeSingle();
+  const { data: existing, error: existingError } = await operationsDb.from('deliveries').select('id,order_id,status').eq('order_id', order.id).maybeSingle();
+  if (existingError) throw new HttpError(503, 'DELIVERY_LOOKUP_FAILED', 'Existing delivery status could not be checked. Try again.');
   if (existing) throw new HttpError(409, 'DELIVERY_EXISTS', 'A delivery record already exists for this order.');
   const { data: delivery, error } = await operationsDb.from('deliveries').insert({ order_id: order.id, delivery_provider: input.provider || null, tracking_code: input.trackingCode || null, status: 'preparing', estimated_delivery_at: input.estimatedDeliveryAt || null, created_by: req.user.id, internal_notes: input.note || null }).select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,created_at').single();
   if (error) throw new HttpError(503, 'DELIVERY_CREATE_FAILED', 'The delivery record could not be created.');
-  await operationsDb.from('delivery_events').insert({ delivery_id: delivery.id, status: 'preparing', note: input.note || 'Order accepted for fulfilment.', source: 'admin', actor_id: req.user.id });
-  await ordersDb.from('orders').update({ status: 'processing', updated_at: new Date().toISOString() }).eq('id', order.id).eq('status','paid');
+  const { error: eventError } = await operationsDb.from('delivery_events').insert({ delivery_id: delivery.id, status: 'preparing', note: input.note || 'Order accepted for fulfilment.', source: 'admin', actor_id: req.user.id });
+  if (eventError) throw new HttpError(503, 'DELIVERY_EVENT_CREATE_FAILED', 'The delivery was created, but its activity history could not be recorded. Refresh before retrying.');
+  const { error: orderStatusError } = await ordersDb.from('orders').update({ status: 'processing', updated_at: new Date().toISOString() }).eq('id', order.id).eq('status','paid');
+  if (orderStatusError) throw new HttpError(503, 'ORDER_FULFILMENT_UPDATE_FAILED', 'The delivery was created, but the order status needs reconciliation. Refresh the order before continuing.');
   await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'delivery.created', entityType: 'delivery', entityId: delivery.id, requestId: req.id, metadata: { orderId: order.id } });
   await enqueueOrderNotice({ ...order }, 'customer.order_processing');
   res.status(201).json({ data: delivery });
@@ -292,9 +417,12 @@ app.patch('/api/v1/admin/deliveries/:id/status', auth, deliveryAdmin, asyncRoute
   if (input.status === 'delivered') patch.delivered_at = now;
   const { data: delivery, error } = await operationsDb.from('deliveries').update(patch).eq('id', id).select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,dispatched_at,delivered_at,updated_at').single();
   if (error) throw new HttpError(503, 'DELIVERY_UPDATE_FAILED', 'The delivery status could not be saved.');
-  await operationsDb.from('delivery_events').insert({ delivery_id: id, status: input.status, note: input.note || null, source: 'admin', actor_id: req.user.id });
-  if (input.status === 'delivered') await ordersDb.from('orders').update({ status: 'delivered', updated_at: now }).eq('id', current.order_id).eq('payment_status','paid');
-  else if (['dispatched','in_transit'].includes(input.status)) await ordersDb.from('orders').update({ status: 'shipped', updated_at: now }).eq('id', current.order_id).eq('payment_status','paid').in('status',['paid','processing','shipped']);
+  const { error: eventError } = await operationsDb.from('delivery_events').insert({ delivery_id: id, status: input.status, note: input.note || null, source: 'admin', actor_id: req.user.id });
+  if (eventError) throw new HttpError(503, 'DELIVERY_EVENT_WRITE_FAILED', 'The status was changed, but its activity history could not be recorded. Refresh before making another change.');
+  let orderStatusResult = { error: null };
+  if (input.status === 'delivered') orderStatusResult = await ordersDb.from('orders').update({ status: 'delivered', updated_at: now }).eq('id', current.order_id).eq('payment_status','paid');
+  else if (['dispatched','in_transit'].includes(input.status)) orderStatusResult = await ordersDb.from('orders').update({ status: 'shipped', updated_at: now }).eq('id', current.order_id).eq('payment_status','paid').in('status',['paid','processing','shipped']);
+  if (orderStatusResult.error) throw new HttpError(503, 'ORDER_STATUS_SYNC_FAILED', 'Delivery status was changed, but the order status needs reconciliation. Refresh before continuing.');
   await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'delivery.status_changed', entityType: 'delivery', entityId: id, requestId: req.id, metadata: { from: current.status, to: input.status } });
   res.json({ data: delivery });
 }));
@@ -312,7 +440,7 @@ app.get('/api/v1/admin/notifications', auth, notificationsView, asyncRoute(async
   const limit = clampInt(req.query.limit, 50, 1, 100);
   const { data, error } = await operationsDb.from('notification_jobs').select('id,order_id,channel,template_key,status,attempts,available_at,last_error_code,created_at,updated_at').order('created_at', { ascending: false }).limit(limit);
   if (error) throw new HttpError(503, 'NOTIFICATIONS_UNAVAILABLE', 'Notification jobs could not be loaded.');
-  res.json({ data: data || [], note: 'Queue visibility is implemented; an email/SMS delivery provider and worker still need to be configured.' });
+  res.json({ data: data || [], delivery: { provider: isVineEmailConfigured() ? 'resend' : null, configured: isVineEmailConfigured(), workerEnabled: isVineEmailConfigured(), message: isVineEmailConfigured() ? 'Transactional email delivery is enabled. Sent and failed messages are recorded here.' : 'Transactional email delivery is disabled until RESEND_API_KEY and VINE_EMAIL_FROM are configured on this Operations service.' } });
 }));
 
 app.post('/api/v1/admin/notifications/:id/requeue', auth, notificationsManage, asyncRoute(async (req, res) => {
@@ -326,4 +454,13 @@ app.post('/api/v1/admin/notifications/:id/requeue', auth, notificationsManage, a
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);
-app.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ level: 'info', service: process.env.SERVICE_NAME, port })));
+app.listen(port, '0.0.0.0', () => {
+  console.log(JSON.stringify({ level: 'info', service: process.env.SERVICE_NAME, port, emailDeliveryConfigured: isVineEmailConfigured() }));
+  if (isVineEmailConfigured()) {
+    void processNotificationQueue();
+    const workerTimer = setInterval(() => { void processNotificationQueue(); }, 30_000);
+    workerTimer.unref();
+  } else {
+    console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'notification_worker_not_started', code: 'EMAIL_PROVIDER_NOT_CONFIGURED' }));
+  }
+});
