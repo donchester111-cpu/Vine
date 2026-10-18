@@ -1,138 +1,94 @@
-# Vine Store — backend foundation (v0.1)
+# Vine — integrated storefront and operations
 
-This is the first backend implementation for **Vine, an online retail store**. Vine owns the customer relationship, order, payment, supplier coordination, and delivery experience. There is no public seller registration or independent seller storefront.
+Vine is a Nigerian online retail store. Vine owns the customer relationship, catalogue, order processing, supplier coordination, customer reviews, delivery workflow, and staff permissions. It is not a public seller marketplace.
 
-**This package has not been deployed.** The backend source and migrations require deployment to the existing Render services, and the matching static pages are in the sibling `site/` folder in the integrated ZIP. Apply SQL only to the matching Supabase project, and do not run deployment steps until the checklist is complete.
+This archive is the complete source for a **controlled deployment** of the current Vine code. It has not been deployed or pushed to GitHub by this archive-generation process. The live Supabase projects have been inspected and the listed database changes applied directly using the connected Supabase access. Payment configuration and checkout activation remain intentionally untouched.
 
-## Architecture
+## Project layout
 
-Three Node.js/Express services run independently on Render:
+- `Frontend/index.html` — customer storefront, categories, product details/gallery, verified-purchase reviews, product Q&A, cart and account dashboard.
+- `Frontend/vineger.html` — private worker portal, product management, multi-image picker/live preview, orders, suppliers, persistent deliveries, customer-question inbox, notifications and passwordless staff access.
+- `Frontend/vineowner.html` — private owner control centre for staff invitations, roles, permission assignments, overrides, audit and system checks. It is not linked from the public storefront.
+- `services/accounts-api` — customer authentication/profile/address API and owner/staff management.
+- `services/store-api` — product/category/review/Q&A/image APIs, catalogue permissions, inventory checks and checkout creation.
+- `services/operations-api` — delivery records/history, verified payment webhooks, payment status, audits, sales analytics and the transactional-notification worker.
+- `packages/shared` — security, RBAC, validation, CORS and shared transactional email.
+- `supabase/migrations` — SQL history for all four isolated databases; the migrations include the database changes applied during the integration audit.
 
-- `vine-accounts-api`: Supabase Auth session endpoints, profiles, customer addresses, and role checks.
-- `vine-store-api`: public catalogue API, private catalogue/supplier administration, stock reservations, checkout/order creation, and customer order history.
-- `vine-operations-api`: Paystack initialization and verified webhooks, manual bank-transfer confirmation, delivery tracking, audit records, notification queue, and daily paid-sales analytics.
+## Existing production service addresses
 
-The four Supabase projects keep different concerns isolated:
-
-| Supabase project | Project ref | Owned data |
+| Service | URL | Used for |
 |---|---|---|
-| `vine_accounts` | `jktuwbgocpixtelfxzwq` | Supabase Auth, customer profiles/addresses, private staff roles |
-| `vine_products` | `xiehbdaaioifjcbnvpqf` | Catalogue, product stock, suppliers and private supplier pricing, reservations |
-| `vine_orders_payments` | `ybwdecxsbveiobfvwkvr` | Order/address snapshots, order items, payment attempts and provider events |
-| `vine_operations` | `sqtntfnbjtguqddvvsly` | Deliveries, audit trail, notification queue, paid-sales ledger/analytics |
+| Accounts API | `https://vine-fnoh.onrender.com` | Customer sessions, profiles, staff identity/roles and owner management |
+| Store API | `https://vine-store-api.onrender.com` | Live product catalogue, images, reviews, Q&A, stock and product administration |
+| Operations API | `https://vine-operations-api.onrender.com` | Orders, delivery history/status, verified sales analytics and notification delivery |
 
-Because those are four different databases, PostgreSQL cannot enforce foreign keys across them. The APIs validate account ownership and product IDs; order rows keep immutable product/price and delivery-address snapshots. Treat cross-project validation as a critical boundary.
+The browser uses only public URLs and the Supabase publishable key. Service-role keys, the owner password and session-signing secret belong only in private Render environment variables.
 
-## Before running anything
+## Isolated Supabase projects
 
-1. Keep `CHECKOUT_ENABLED=false` until product sourcing, stock quantities, delivery pricing, Paystack keys/webhook, and bank transfer instructions are confirmed.
-2. Do **not** share a Supabase `service_role`/secret key in chat, HTML, GitHub, screenshots, or `.env.example`. Store it only as a private Render environment variable.
-3. The Supabase project URLs in `.env.example` and `render.yaml` are identifiers, not keys. The `AUTH_SUPABASE_ANON_KEY` is the public client key used for Supabase Auth calls; server service-role keys bypass RLS and must remain secret.
-4. Use a new GitHub repository or an existing private repository for this project. Do not put it in the StudentNija repository unless you deliberately want to mix the projects.
+| Project | Ref | Responsibility |
+|---|---|---|
+| `vine_accounts` | `jktuwbgocpixtelfxzwq` | Supabase Auth, customer profiles/addresses, staff memberships, roles, permissions, owner settings and audit |
+| `vine_products` | `xiehbdaaioifjcbnvpqf` | Products, categories, inventory reservations, supplier records, public product-image storage, reviews, helpful votes and Q&A |
+| `vine_orders_payments` | `ybwdecxsbveiobfvwkvr` | Orders, order items, payments and provider events |
+| `vine_operations` | `sqtntfnbjtguqddvvsly` | Delivery records/events, notification queue, operational audit, sales ledger and analytics |
 
-## Database setup — one project at a time
+Cross-project identity links intentionally use IDs verified by the owning API instead of pretending PostgreSQL can create foreign keys between separate Supabase projects.
 
-Open each project's **SQL Editor** in Supabase and run only its matching file. Apply in this order so you can stop and investigate any failure before continuing:
+## Integration state
 
-1. Project `vine_accounts`: `supabase/migrations/vine_accounts/001_accounts.sql`
-2. Project `vine_products`: `supabase/migrations/vine_products/001_products_inventory.sql`
-3. Project `vine_orders_payments`: `supabase/migrations/vine_orders_payments/001_orders_payments.sql`
-4. Project `vine_operations`: `supabase/migrations/vine_operations/001_operations_analytics.sql`
+The code now includes the Store API image upload route with the middleware initialized before its routes, public product detail/reviews/gallery and Q&A routes, staff catalogue routes for draft/published/archived products, database-backed delivery history, verified-purchase enforcement, and an email queue worker. The owner account has an active membership in the configurable staff-role model; the invited staff account was confirmed active during the audit.
 
-These scripts create tables/functions/policies; they do not insert product stock, apply real supplier records, create payment credentials, or enable checkout. Product and supplier seed data are deliberately not fake-filled.
+The live Render logs exposed a Store API start-up failure caused by `productImageBody` being referenced before initialization. The source in this archive fixes the initialization order. This does **not** change the currently deployed Render services because this task did not deploy anything.
 
-### Supabase Auth settings
+### One external credential is still required for real staff email
 
-In the `vine_accounts` project, configure Auth's site URL and allowed redirect URLs after the storefront URL is known. Leave email confirmation enabled unless you deliberately decide otherwise. The signup endpoint creates Auth users; the database trigger creates the matching profile.
+Passwordless staff sign-in and staff invitations generate secure Supabase magic/invite links server-side, then send them through Resend. The previous live failure was Supabase's built-in sender returning `429 email rate limit exceeded`. The source now returns a specific error when transactional mail is not configured, instead of hiding this as a generic sign-in failure.
 
-### Bootstrap the first Vine owner (after SQL is installed)
+Before email can actually be sent, the existing Render Accounts and Operations services need these private environment variables:
 
-First register the intended owner using Vine's signup screen after the accounts API is running, or create that user through Supabase Auth. Then run the following in the `vine_accounts` SQL Editor after replacing the email with the exact owner email:
+- `RESEND_API_KEY` — a real Resend API key.
+- `VINE_EMAIL_FROM` — a sender address/display name on a verified domain, e.g. `Vine <no-reply@your-verified-domain>`.
 
-```sql
-insert into public.admin_roles(user_id, role)
-select id, 'owner'
-from auth.users
-where lower(email) = lower('owner@example.com')
-on conflict (user_id, role) do nothing;
+No key or verified sender credential was available to this session, so none has been invented. A ZIP cannot make third-party email deliver without these provider credentials. After entering them in Render, use the private service logs and a real invited staff account to verify delivery. Supabase Auth's Site URL and redirect allowlist must include the actual `https://vinestore.com.ng/vineger.html` URL.
+
+### Owner session agreement across services
+
+The owner portal uses an HMAC-signed, short-lived owner session. Set the same `OWNER_SESSION_SECRET` (at least 32 bytes), `VINE_OWNER_USER_ID`, and `VINE_OWNER_EMAIL` in all three APIs. The owner user ID is the Supabase Auth ID in `vine_accounts`; the source default owner email is `donchester111@gmail.com`. The session can call only the explicitly allowed non-payment admin route prefixes; payment admin routes are excluded from the custom owner-session scope. Store/Operations private actions still run their database-backed RBAC checks.
+
+Generate a shared random value locally or in a private secret manager; do not put it in this archive or in HTML. Never share secret keys in chat or commit them to a source repository.
+
+## Environment required for the existing services
+
+Use the actual live values in the private Render service environment; do not replace a working service key with a placeholder. The `render.yaml` and `.env.example` files document the variable names and project URLs but contain no secret values.
+
+- Accounts service: `AUTH_SUPABASE_URL`, `AUTH_SUPABASE_ANON_KEY`, `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY`, `VINE_OWNER_EMAIL`, `VINE_OWNER_USER_ID`, `OWNER_SESSION_SECRET`, `OWNER_PASSWORD`, `VINE_STAFF_INVITE_REDIRECT_URL`, `RESEND_API_KEY`, `VINE_EMAIL_FROM`, `ALLOWED_ORIGINS`.
+- Store service: Accounts variables plus `PRODUCTS_SUPABASE_URL`, `PRODUCTS_SUPABASE_SERVICE_ROLE_KEY`, `ORDERS_SUPABASE_URL`, `ORDERS_SUPABASE_SERVICE_ROLE_KEY`, `VINE_PRODUCT_IMAGES_BUCKET=vine-product-images`, `OWNER_SESSION_SECRET`, `VINE_OWNER_USER_ID`, `ALLOWED_ORIGINS`, `CHECKOUT_ENABLED` and `DELIVERY_FEE_KOBO`.
+- Operations service: Accounts variables plus product, order and operations database URLs/service keys, owner-session agreement, `RESEND_API_KEY`, `VINE_EMAIL_FROM`, `ALLOWED_ORIGINS` and existing payment-provider configuration variables.
+
+Set `ALLOWED_ORIGINS` to the exact deployed storefront origin(s), comma-separated, with scheme and hostname and no trailing slash. This is an existing browser CORS control, not a secret.
+
+## Deployment checklist
+
+1. Inspect the target service's current environment before merging values. Preserve its live Supabase service keys; do not replace them with `.env.example` blanks.
+2. Deploy the source in this archive to the matching Render service paths/configuration. The source archive does not push or commit to GitHub and has not automatically triggered a deployment.
+3. Configure the same owner-session values on all three APIs and configure a verified transactional sender in Resend. This is necessary for owner cross-service access and staff sign-in email delivery.
+4. Verify each `/health` and `/ready` endpoint. From `vineowner.html`, run the authenticated service checks; a public health response alone does not prove protected API access.
+5. Test invited-staff sign-in with a real email, then create/edit/archive a product, upload the main and gallery images, publish a customer question answer, create/update a delivery on a paid order, and inspect the audit/notification records.
+6. Keep `CHECKOUT_ENABLED=false` until product sourcing, available stock, delivery coverage/fees, payment instructions/provider configuration, webhook and reconciliation checks are intentionally reviewed. Payment settings were not changed in this work.
+
+## Checks
+
+Run in the repository root:
+
+```sh
+npm test
+npm run check
 ```
 
-Verify that one row was inserted. **Do not expose a public endpoint that lets a user assign themselves the owner/admin role.** Later staff roles should be granted deliberately from the SQL Editor or an audited owner-only administration flow.
+Static inline JavaScript in the HTML pages should also be parsed before deployment. The integration audit includes contract tests for route alignment, staff permissions, passwordless email, upload-middleware initialization and delivery persistence.
 
-## Server configuration
+## Important limitation
 
-Copy `.env.example` to `.env` only for local development. Never commit the actual `.env` file. All service keys are currently blank by design.
-
-For Render, provide variables on each service individually:
-
-### `vine-accounts-api`
-
-- `AUTH_SUPABASE_URL` — already set in `render.yaml` to `vine_accounts`.
-- `AUTH_SUPABASE_ANON_KEY` — the public/anon key from `vine_accounts`.
-- `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY` — private service-role/secret key from `vine_accounts`.
-- `VINE_OWNER_EMAIL` — the configured owner email (`donchester111@gmail.com`).
-- `OWNER_PASSWORD` — set privately in Render; it must match the owner's Supabase Auth password,
-  because the server still signs in through Supabase and returns a real Supabase session.
-- `ALLOWED_ORIGINS` — exact storefront origin(s), comma-separated; no wildcard in production.
-
-### `vine-store-api`
-
-- `AUTH_SUPABASE_URL`, `AUTH_SUPABASE_ANON_KEY`, `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY` as above.
-- `PRODUCTS_SUPABASE_URL`, `PRODUCTS_SUPABASE_SERVICE_ROLE_KEY` from `vine_products`.
-- `ORDERS_SUPABASE_URL`, `ORDERS_SUPABASE_SERVICE_ROLE_KEY` from `vine_orders_payments`.
-- `ALLOWED_ORIGINS`, `CHECKOUT_ENABLED=false`, and `DELIVERY_FEE_KOBO`.
-
-### `vine-operations-api`
-
-- The account/products/orders variables above, plus `OPERATIONS_SUPABASE_URL` and `OPERATIONS_SUPABASE_SERVICE_ROLE_KEY` from `vine_operations`.
-- `PAYSTACK_SECRET_KEY` — private secret from Paystack; absent means online payment initialization is unavailable.
-- `PAYSTACK_CALLBACK_URL` — the public storefront URL to return to after Paystack redirects back.
-- `BANK_TRANSFER_BANK_NAME`, `BANK_TRANSFER_ACCOUNT_NAME`, `BANK_TRANSFER_ACCOUNT_NUMBER` — the business account details to show to customers. Account number must be ten digits.
-- `ALLOWED_ORIGINS` — the same precise storefront origin(s).
-
-Use only the correct project's key for each database. Do not paste any of these service-role keys into the storefront's `window.VINE_CONFIG`.
-
-## Render staging deployment (not performed)
-
-`render.yaml` describes the three independently hosted services and sets the correct start and health-check commands. It has auto-deploy disabled. Creating/provisioning a Blueprint can create public services, so wait until the SQL migrations are applied and all required environment values are ready. On every service set the final `ALLOWED_ORIGINS` value; without the final storefront domain, browser CORS will not work.
-
-The services bind to `0.0.0.0:$PORT` and expose `/health` for Render health checks. The `/ready` route checks relevant Supabase tables. See the current [Render web-service docs](https://render.com/docs/web-services) and [health-check docs](https://render.com/docs/health-checks). Free Render services are useful for staging but have availability/idle limitations; do not assume they provide production-grade uptime for payment webhooks.
-
-## Connect the storefront
-
-The ready-to-edit storefront is `frontend/vine_store_v3_backend_ready.html`. It includes the previous Vine design, a customer sign-in/sign-up modal, shipping form, Paystack redirect flow, manual bank transfer instructions, and live catalogue loading. It deliberately ships with blank API URLs and retains the demo catalogue only while URLs are blank.
-
-When all three services are deployed and health-checked, edit the single `window.VINE_CONFIG` object near the top of its main script:
-
-```js
-window.VINE_CONFIG = {
-  accountsApiBaseUrl: 'https://vine-accounts-api.onrender.com',
-  storeApiBaseUrl: 'https://vine-store-api.onrender.com',
-  operationsApiBaseUrl: 'https://vine-operations-api.onrender.com'
-};
-```
-
-Replace those hostnames with the actual Render URLs. The external copy of the API adapter is `frontend/vine-api-client.js`; the connected HTML is already self-contained and inlines the same adapter. Deploy only one copy of the storefront. Browser sessions use `sessionStorage` in this first version; before scaling the store, harden the frontend/session architecture and deploy a strict CSP to reduce exposure to XSS.
-
-## Payment and stock flow
-
-1. The browser sends product IDs and quantities, never an authoritative amount.
-2. Store API loads published products/prices from `vine_products`, validates the address against `vine_accounts`, reserves the stock through a database function, and writes the order/items/payment row through one transaction in `vine_orders_payments`.
-3. Operations API checks order ownership and amount, then either returns bank-transfer instructions or asks Paystack to initialize a transaction.
-4. Paystack's webhook must match the HMAC-SHA512 signature of the **raw** request body. The service then verifies the transaction directly with Paystack, checks amount/currency/reference, commits reserved stock and updates the order. Browser redirect alone never marks an order paid.
-5. Bank transfers remain pending until a trusted staff member verifies the incoming transfer in the actual bank account and uses the staff-only confirmation endpoint.
-6. When payment is verified, a unique sales ledger records the order once, updates daily analytics, and queues a customer notification job.
-
-Set the Paystack webhook URL in the Paystack dashboard to:
-
-`https://<actual-vine-operations-api-host>/api/v1/webhooks/paystack`
-
-Keep test credentials and real payment credentials separate. Test with Paystack test mode first. Do not use real customer money until payment reconciliation, delivery pricing, bank details, stock reservation expiry, and refunds have been tested end to end.
-
-## What is included / what remains
-
-**Included in this first backend package:** three service entry points; separate per-project SQL; Supabase Auth integration; self-owned profiles/addresses; product/category APIs; supplier and wholesale-cost tables and staff APIs; customer checkout/order history/cancellation; stock reserve/release/commit functions; Paystack initialize/verify-webhook flow; manual transfer verification endpoint; delivery status transitions; audit trail; paid-sales analytics; a notification-job queue; one-file storefront integration.
-
-**Still required before live business:** apply and inspect the account RBAC migration and prior migrations; configure Supabase Auth and RLS; bootstrap the owner; deploy and health-check each service; set exact CORS origins; configure Paystack and webhook; set real supplier/product/stock data and delivery fees; implement an actual email/SMS delivery worker/provider; complete the remaining owner settings APIs; test custom permissions with separate worker accounts and negative authorization cases; test refunds and late-payment/stock edge cases; review the final system with security and payment compliance requirements. Flutterwave is not yet wired to a live adapter in this initial version. These code changes are not a claim of a live deployment.
-
-The package is a working implementation foundation, not a claim that live ordering is operational yet. Checkout is explicitly disabled until those prerequisites are complete.
+This is a full source integration package with live database changes applied, not a declaration that every external integration is live today. Email requires a real Resend key/verified sender, owner access requires matching Render secrets on all APIs, and the Store API source fix still needs controlled deployment and real endpoint/browser testing. Payment configuration intentionally remains outside this update.

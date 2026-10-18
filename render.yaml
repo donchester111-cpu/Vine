@@ -20,7 +20,17 @@ services:
         sync: false
       - key: VINE_OWNER_EMAIL
         value: donchester111@gmail.com
+      - key: VINE_OWNER_USER_ID
+        sync: false
+      - key: OWNER_SESSION_SECRET
+        sync: false
       - key: OWNER_PASSWORD
+        sync: false
+      - key: VINE_STAFF_INVITE_REDIRECT_URL
+        value: https://vinestore.com.ng/vineger.html
+      - key: RESEND_API_KEY
+        sync: false
+      - key: VINE_EMAIL_FROM
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
@@ -42,10 +52,18 @@ services:
         sync: false
       - key: ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: VINE_OWNER_EMAIL
+        value: donchester111@gmail.com
+      - key: VINE_OWNER_USER_ID
+        sync: false
+      - key: OWNER_SESSION_SECRET
+        sync: false
       - key: PRODUCTS_SUPABASE_URL
         value: https://xiehbdaaioifjcbnvpqf.supabase.co
       - key: PRODUCTS_SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: VINE_PRODUCT_IMAGES_BUCKET
+        value: vine-product-images
       - key: ORDERS_SUPABASE_URL
         value: https://ybwdecxsbveiobfvwkvr.supabase.co
       - key: ORDERS_SUPABASE_SERVICE_ROLE_KEY
@@ -73,6 +91,16 @@ services:
       - key: AUTH_SUPABASE_ANON_KEY
         sync: false
       - key: ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: VINE_OWNER_EMAIL
+        value: donchester111@gmail.com
+      - key: VINE_OWNER_USER_ID
+        sync: false
+      - key: OWNER_SESSION_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: VINE_EMAIL_FROM
         sync: false
       - key: PRODUCTS_SUPABASE_URL
         value: https://xiehbdaaioifjcbnvpqf.supabase.co

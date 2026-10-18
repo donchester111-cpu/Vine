@@ -15,7 +15,7 @@
     "start:store": "npm --workspace @vine/store-api start",
     "start:operations": "npm --workspace @vine/operations-api start",
     "test": "node --test tests/*.test.js",
-    "check": "node --check packages/shared/src/app.js && node --check packages/shared/src/auth.js && node --check packages/shared/src/db.js && node --check packages/shared/src/errors.js && node --check packages/shared/src/rbac.js && node --check packages/shared/src/validation.js && node --check services/accounts-api/src/owner-admin.js && node --check services/accounts-api/src/server.js && node --check services/store-api/src/server.js && node --check services/operations-api/src/server.js"
+    "check": "node --check packages/shared/src/app.js && node --check packages/shared/src/auth.js && node --check packages/shared/src/db.js && node --check packages/shared/src/errors.js && node --check packages/shared/src/rbac.js && node --check packages/shared/src/validation.js && node --check packages/shared/src/email.js && node --check services/accounts-api/src/owner-admin.js && node --check services/accounts-api/src/server.js && node --check services/store-api/src/server.js && node --check services/operations-api/src/server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
