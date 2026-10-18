@@ -17,6 +17,11 @@ const app = express();
 applySecurity(app, { requestLimit: 180 });
 app.use(express.json({ limit: '128kb' }));
 const auth = requireAuth(authClient);
+// Define upload middleware before registering any route that references it.
+// Keeping these constants near app setup prevents a temporal-dead-zone crash at startup.
+const productImageBucket = String(process.env.VINE_PRODUCT_IMAGES_BUCKET || 'vine-product-images').trim();
+const productImageBody = express.raw({ type: ['image/jpeg', 'image/png', 'image/webp', 'image/avif'], limit: '5mb' });
+const catalogView = requirePermission(accountsAdmin, 'products.view', ['owner', 'admin', 'catalog']);
 const catalogAdmin = requirePermission(accountsAdmin, 'products.manage', ['owner', 'admin', 'catalog']);
 const supplierView = requirePermission(accountsAdmin, 'suppliers.view', ['owner', 'admin', 'catalog']);
 const supplierManage = requirePermission(accountsAdmin, 'suppliers.manage', ['owner', 'admin', 'catalog']);
@@ -47,11 +52,74 @@ app.get('/ready', asyncRoute(async (_req, res) => {
   res.json({ status: 'ready', service: process.env.SERVICE_NAME });
 }));
 
+const publicStoreSettings = {
+  storefront: {
+    storeName: 'Vine', tagline: 'Great finds. Great prices.', supportEmail: '', supportPhone: '',
+    announcementEnabled: false, announcementText: ''
+  },
+  shipping: {
+    baseFeeNgn: null, freeShippingEnabled: false, freeShippingThresholdNgn: null,
+    estimatedMinDays: 2, estimatedMaxDays: 7, coverageStates: []
+  },
+  seo: {
+    title: 'Vine — Great finds. Great prices.',
+    description: 'Shop useful finds across everyday categories at Vine.',
+    canonicalUrl: 'https://vinestore.com.ng', socialImageUrl: ''
+  },
+  policies: { returnsPolicy: '', privacyPolicy: '', termsOfService: '', shippingPolicy: '' }
+};
+
+function publicSettingGroup(group, saved) {
+  const defaults = publicStoreSettings[group];
+  const source = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  const output = { ...defaults };
+  for (const key of Object.keys(defaults)) {
+    const value = source[key];
+    if (typeof defaults[key] === 'boolean') output[key] = typeof value === 'boolean' ? value : defaults[key];
+    else if (typeof defaults[key] === 'number' || defaults[key] === null) output[key] = value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : defaults[key];
+    else if (Array.isArray(defaults[key])) output[key] = Array.isArray(value) ? value.map(x => String(x).trim().slice(0, 80)).filter(Boolean).slice(0, 40) : defaults[key];
+    else if (typeof defaults[key] === 'string') output[key] = typeof value === 'string' ? value.trim().slice(0, key.toLowerCase().includes('policy') ? 8000 : 1000) : defaults[key];
+  }
+  if (!/^\S+@\S+\.\S+$/.test(output.supportEmail)) output.supportEmail = '';
+  for (const key of ['canonicalUrl', 'socialImageUrl']) {
+    if (!output[key]) continue;
+    try { if (new URL(output[key]).protocol !== 'https:') output[key] = key === 'canonicalUrl' ? defaults.canonicalUrl : ''; }
+    catch { output[key] = key === 'canonicalUrl' ? defaults.canonicalUrl : ''; }
+  }
+  if (output.estimatedMaxDays < output.estimatedMinDays) output.estimatedMaxDays = output.estimatedMinDays;
+  if (output.freeShippingThresholdNgn === null || output.freeShippingThresholdNgn === 0) output.freeShippingEnabled = false;
+  return output;
+}
+
+// Public configuration deliberately exposes only fields rendered by the storefront.
+// Payment, account, owner, secret, and internal operations settings are never returned.
+app.get('/api/v1/storefront/config', asyncRoute(async (_req, res) => {
+  const { data, error } = await accountsAdmin.from('vineowner_settings')
+    .select('setting_key,setting_value,updated_at')
+    .in('setting_key', ['storefront', 'shipping', 'seo', 'policies']);
+  if (error) throw new HttpError(503, 'STOREFRONT_CONFIG_UNAVAILABLE', 'Store information could not be loaded. Please try again shortly.');
+  const rows = new Map((data || []).map(row => [row.setting_key, row]));
+  const config = Object.fromEntries(Object.keys(publicStoreSettings).map(key => [key, publicSettingGroup(key, rows.get(key)?.setting_value)]));
+  config.shipping.pricingConfigured = Boolean(rows.has('shipping') && Number.isFinite(Number(rows.get('shipping')?.setting_value?.baseFeeNgn)) && Number(rows.get('shipping')?.setting_value?.baseFeeNgn) >= 0);
+  res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+  res.json({ data: { ...config, updatedAt: Object.fromEntries([...rows].map(([key, row]) => [key, row.updated_at])) } });
+}));
+
 app.get('/api/v1/categories', asyncRoute(async (_req, res) => {
   const { data, error } = await productsDb.from('categories').select('id,name,slug,description,sort_order').eq('is_active', true).order('sort_order').order('name');
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
   res.json({ data: data || [] });
 }));
+
+// Staff-only category list includes inactive categories so existing products can be edited safely.
+app.get('/api/v1/admin/categories', auth, catalogView, asyncRoute(async (_req, res) => {
+  const { data, error } = await productsDb.from('categories')
+    .select('id,name,slug,description,sort_order,is_active,created_at,updated_at')
+    .order('sort_order').order('name');
+  if (error) throw new HttpError(503, 'CATEGORIES_UNAVAILABLE', 'Product categories could not be loaded.');
+  res.json({ data: data || [] });
+}));
+
 
 app.get('/api/v1/products', asyncRoute(async (req, res) => {
   const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
@@ -372,6 +440,113 @@ app.patch('/api/v1/admin/questions/:id', auth, catalogAdmin, asyncRoute(async (r
   res.json({ data: { ...data, verifiedPurchase: Boolean(data.is_verified_purchase) } });
 }));
 
+// Customer account history is served by the Store API because reviews, questions and favourites
+// live in vine_products while the authenticated customer identity is verified against vine_accounts.
+app.get('/api/v1/me/favorites', auth, asyncRoute(async (req, res) => {
+  const { data: rows, error } = await productsDb.from('customer_favorites')
+    .select('product_id,created_at').eq('customer_id', req.user.id)
+    .order('created_at', { ascending: false }).limit(200);
+  if (error) throw new HttpError(503, 'FAVORITES_UNAVAILABLE', 'Your saved products could not be loaded.');
+  const productIds = [...new Set((rows || []).map(row => row.product_id))];
+  if (!productIds.length) return res.json({ data: { favorites: [], count: 0 } });
+  const { data: productRows, error: productsError } = await productsDb.from('products')
+    .select(publicProductFields).in('id', productIds).eq('status', 'published');
+  if (productsError) throw new HttpError(503, 'FAVORITES_UNAVAILABLE', 'Your saved products could not be loaded.');
+  const productsById = new Map((productRows || []).map(row => [row.id, toPublicProduct(row)]));
+  const favorites = (rows || []).filter(row => productsById.has(row.product_id)).map(row => ({
+    product: productsById.get(row.product_id), createdAt: row.created_at
+  }));
+  res.json({ data: { favorites, count: favorites.length } });
+}));
+
+app.post('/api/v1/me/favorites/sync', auth, asyncRoute(async (req, res) => {
+  const input = z.object({ productIds: z.array(uuidSchema).max(200) }).strict().parse(req.body);
+  const productIds = [...new Set(input.productIds.map(String))];
+  if (!productIds.length) return res.json({ data: { saved: 0, skipped: 0 } });
+  const { data: products, error: productsError } = await productsDb.from('products')
+    .select('id').in('id', productIds).eq('status', 'published');
+  if (productsError) throw new HttpError(503, 'FAVORITES_SYNC_FAILED', 'Your saved items could not be synced. Please try again.');
+  const validIds = (products || []).map(row => row.id);
+  const rows = validIds.map(product_id => ({ customer_id: req.user.id, product_id }));
+  if (rows.length) {
+    const { error } = await productsDb.from('customer_favorites').upsert(rows, { onConflict: 'customer_id,product_id', ignoreDuplicates: true });
+    if (error) throw new HttpError(503, 'FAVORITES_SYNC_FAILED', 'Your saved items could not be synced. Please try again.');
+  }
+  res.json({ data: { saved: validIds.length, skipped: productIds.length - validIds.length } });
+}));
+
+app.put('/api/v1/me/favorites/:productId', auth, asyncRoute(async (req, res) => {
+  const productId = uuidSchema.parse(req.params.productId);
+  const { data: product, error: productError } = await productsDb.from('products')
+    .select('id').eq('id', productId).eq('status', 'published').maybeSingle();
+  if (productError) throw new HttpError(503, 'FAVORITE_SAVE_FAILED', 'This product could not be checked. Please try again.');
+  if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Only currently published products can be saved.');
+  const { error } = await productsDb.from('customer_favorites').upsert({
+    customer_id: req.user.id, product_id: productId
+  }, { onConflict: 'customer_id,product_id', ignoreDuplicates: true });
+  if (error) throw new HttpError(503, 'FAVORITE_SAVE_FAILED', 'This product could not be saved to your account. Please try again.');
+  res.status(200).json({ data: { productId, saved: true } });
+}));
+
+app.delete('/api/v1/me/favorites/:productId', auth, asyncRoute(async (req, res) => {
+  const productId = uuidSchema.parse(req.params.productId);
+  const { error } = await productsDb.from('customer_favorites').delete()
+    .eq('customer_id', req.user.id).eq('product_id', productId);
+  if (error) throw new HttpError(503, 'FAVORITE_REMOVE_FAILED', 'This saved product could not be removed. Please try again.');
+  res.status(204).end();
+}));
+
+app.get('/api/v1/me/reviews', auth, asyncRoute(async (req, res) => {
+  const limit = clampInt(req.query.limit, 100, 1, 100);
+  const { data: reviews, error } = await productsDb.from('product_reviews')
+    .select('id,product_id,rating,title,body,pros,cons,image_urls,status,is_verified_purchase,helpful_count,created_at,updated_at')
+    .eq('customer_id', req.user.id).order('created_at', { ascending: false }).limit(limit);
+  if (error) throw new HttpError(503, 'MY_REVIEWS_UNAVAILABLE', 'Your review history could not be loaded.');
+  const productIds = [...new Set((reviews || []).map(row => row.product_id))];
+  let productsById = new Map();
+  if (productIds.length) {
+    const { data: products, error: productsError } = await productsDb.from('products')
+      .select('id,name,slug,image_url,status').in('id', productIds);
+    if (productsError) throw new HttpError(503, 'MY_REVIEWS_UNAVAILABLE', 'Product details for your reviews could not be loaded.');
+    productsById = new Map((products || []).map(row => [row.id, row]));
+  }
+  res.json({ data: (reviews || []).map(row => {
+    const product = productsById.get(row.product_id);
+    return {
+      id: row.id, productId: row.product_id, rating: Number(row.rating), title: row.title, body: row.body,
+      pros: row.pros || '', cons: row.cons || '', imageUrls: row.image_urls || [], status: row.status,
+      verifiedPurchase: Boolean(row.is_verified_purchase), helpfulCount: Number(row.helpful_count || 0),
+      createdAt: row.created_at, updatedAt: row.updated_at,
+      product: product ? { id: product.id, name: product.name, slug: product.slug, imageUrl: product.image_url, status: product.status } : null
+    };
+  }) });
+}));
+
+app.get('/api/v1/me/questions', auth, asyncRoute(async (req, res) => {
+  const limit = clampInt(req.query.limit, 100, 1, 100);
+  const { data: questions, error } = await productsDb.from('product_questions')
+    .select('id,product_id,question,answer,status,is_verified_purchase,created_at,answered_at,updated_at')
+    .eq('customer_id', req.user.id).order('created_at', { ascending: false }).limit(limit);
+  if (error) throw new HttpError(503, 'MY_QUESTIONS_UNAVAILABLE', 'Your product questions could not be loaded.');
+  const productIds = [...new Set((questions || []).map(row => row.product_id))];
+  let productsById = new Map();
+  if (productIds.length) {
+    const { data: products, error: productsError } = await productsDb.from('products')
+      .select('id,name,slug,image_url,status').in('id', productIds);
+    if (productsError) throw new HttpError(503, 'MY_QUESTIONS_UNAVAILABLE', 'Product details for your questions could not be loaded.');
+    productsById = new Map((products || []).map(row => [row.id, row]));
+  }
+  res.json({ data: (questions || []).map(row => {
+    const product = productsById.get(row.product_id);
+    return {
+      id: row.id, productId: row.product_id, question: row.question, answer: row.answer || '', status: row.status,
+      verifiedPurchase: Boolean(row.is_verified_purchase), createdAt: row.created_at, answeredAt: row.answered_at,
+      updatedAt: row.updated_at,
+      product: product ? { id: product.id, name: product.name, slug: product.slug, imageUrl: product.image_url, status: product.status } : null
+    };
+  }) });
+}));
+
 app.get('/api/v1/products/:slug', asyncRoute(async (req, res) => {
   const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
   if (expiryError) throw new HttpError(503, 'INVENTORY_UNAVAILABLE', 'Product availability could not be refreshed.');
@@ -384,8 +559,6 @@ app.get('/api/v1/products/:slug', asyncRoute(async (req, res) => {
 
 // Product photos are uploaded through the Store API so only staff with catalogue permissions can write to Storage.
 // The public bucket allows storefront image reads; uploads and deletions remain server-side using service-role credentials.
-const productImageBucket = String(process.env.VINE_PRODUCT_IMAGES_BUCKET || 'vine-product-images').trim();
-const productImageBody = express.raw({ type: 'image/*', limit: '5mb' });
 const productImageTypes = new Map([
   ['image/jpeg', { extension: 'jpg', signature: buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff }],
   ['image/png', { extension: 'png', signature: buffer => buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])) }],
@@ -463,6 +636,34 @@ function productPatchRow(input) {
   row.updated_at = new Date().toISOString();
   return row;
 }
+
+
+// Staff catalogue view: includes draft and archived records, unlike the public storefront listing.
+app.get('/api/v1/admin/products', auth, catalogView, asyncRoute(async (req, res) => {
+  const page = clampInt(req.query.page, 1, 1, 10000);
+  const limit = clampInt(req.query.limit, 100, 1, 100);
+  const status = String(req.query.status || 'all').trim().toLowerCase();
+  if (!['all','draft','published','archived'].includes(status)) {
+    throw new HttpError(400, 'PRODUCT_STATUS_FILTER_INVALID', 'Choose all products, drafts, published products or archived products.');
+  }
+  const search = normalizeProductQuery(req.query.search);
+  let query = productsDb.from('products').select(publicProductFields, { count: 'exact' });
+  if (status !== 'all') query = query.eq('status', status);
+  if (search) query = query.textSearch('name', search, { type: 'websearch', config: 'simple' });
+  query = query.order('updated_at', { ascending: false }).order('created_at', { ascending: false });
+  const from = (page - 1) * limit;
+  const { data, error, count } = await query.range(from, from + limit - 1);
+  if (error) throw new HttpError(503, 'ADMIN_CATALOG_UNAVAILABLE', 'The staff product list could not be loaded.');
+  const rows = (data || []).map(row => ({
+    ...toPublicProduct(row),
+    status: row.status,
+    stockQuantity: Number(row.stock_quantity),
+    reservedQuantity: Number(row.reserved_quantity),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+  res.json({ data: { products: rows, page, limit, total: Number(count || 0), status } });
+}));
 
 app.post('/api/v1/admin/products', auth, catalogAdmin, asyncRoute(async (req, res) => {
   const input = productCreateSchema.parse(req.body);
