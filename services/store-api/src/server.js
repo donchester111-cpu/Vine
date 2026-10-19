@@ -52,27 +52,10 @@ app.get('/ready', asyncRoute(async (_req, res) => {
   res.json({ status: 'ready', service: process.env.SERVICE_NAME });
 }));
 
-// Inventory expiry must not sit in front of a customer-facing catalogue read.
-// Trigger cleanup at most once per minute per instance; reservation creation also performs
-// authoritative cleanup inside the database transaction before checking stock.
-let lastInventoryCleanupAt = 0;
-let inventoryCleanupInFlight = null;
-function scheduleInventoryReservationCleanup() {
-  const now = Date.now();
-  if (inventoryCleanupInFlight || now - lastInventoryCleanupAt < 60_000) return;
-  lastInventoryCleanupAt = now;
-  inventoryCleanupInFlight = productsDb.rpc('expire_vine_inventory_reservations')
-    .then(({ error }) => {
-      if (error) console.warn(JSON.stringify({ level: 'warn', event: 'inventory_expiry_cleanup_failed', code: error.code || 'INVENTORY_CLEANUP_ERROR' }));
-    })
-    .catch(() => console.warn(JSON.stringify({ level: 'warn', event: 'inventory_expiry_cleanup_failed', code: 'INVENTORY_CLEANUP_ERROR' })))
-    .finally(() => { inventoryCleanupInFlight = null; });
-}
-
 const publicStoreSettings = {
   storefront: {
     storeName: 'Vine', tagline: 'Great finds. Great prices.', supportEmail: '', supportPhone: '',
-    announcementEnabled: false, announcementText: ''
+    currency: 'NGN', timezone: 'Africa/Lagos', announcementEnabled: false, announcementText: ''
   },
   shipping: {
     baseFeeNgn: null, freeShippingEnabled: false, freeShippingThresholdNgn: null,
@@ -125,7 +108,6 @@ app.get('/api/v1/storefront/config', asyncRoute(async (_req, res) => {
 app.get('/api/v1/categories', asyncRoute(async (_req, res) => {
   const { data, error } = await productsDb.from('categories').select('id,name,slug,description,sort_order').eq('is_active', true).order('sort_order').order('name');
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
-  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
   res.json({ data: data || [] });
 }));
 
@@ -140,7 +122,8 @@ app.get('/api/v1/admin/categories', auth, catalogView, asyncRoute(async (_req, r
 
 
 app.get('/api/v1/products', asyncRoute(async (req, res) => {
-  scheduleInventoryReservationCleanup();
+  const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
+  if (expiryError) throw new HttpError(503, 'INVENTORY_UNAVAILABLE', 'Product availability could not be refreshed.');
   const page = clampInt(req.query.page, 1, 1, 10_000);
   const limit = clampInt(req.query.limit, 24, 1, 48);
   const search = normalizeProductQuery(req.query.search);
@@ -161,7 +144,6 @@ app.get('/api/v1/products', asyncRoute(async (req, res) => {
   const from = (page - 1) * limit;
   const { data, error, count } = await query.range(from, from + limit - 1);
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
-  res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=120');
   res.json({ data: { products: (data || []).map(toPublicProduct), page, limit, total: count || 0 } });
 }));
 
@@ -566,12 +548,12 @@ app.get('/api/v1/me/questions', auth, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/v1/products/:slug', asyncRoute(async (req, res) => {
-  scheduleInventoryReservationCleanup();
+  const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
+  if (expiryError) throw new HttpError(503, 'INVENTORY_UNAVAILABLE', 'Product availability could not be refreshed.');
   const slug = safeText(180).parse(req.params.slug);
   const { data, error } = await productsDb.from('products').select(publicProductFields).eq('slug', slug).eq('status', 'published').maybeSingle();
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
   if (!data) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
-  res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
   res.json({ data: toPublicProduct(data) });
 }));
 
@@ -631,7 +613,7 @@ app.post('/api/v1/admin/categories', auth, catalogAdmin, asyncRoute(async (req, 
 }));
 
 const httpsUrlSchema = z.string().url().max(2048).refine(value => { try { return new URL(value).protocol === 'https:'; } catch { return false; } }, 'Only HTTPS image URLs are allowed.');
-const productCreateSchema = z.object({
+const productFieldsSchema = z.object({
   categoryId: uuidSchema.nullable().optional(), sku: safeText(80), slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(180),
   name: safeText(180), description: z.string().max(10000).default(''),
   priceNgn: z.number().finite().min(0).max(100000000), compareAtPriceNgn: z.number().finite().min(0).max(100000000).nullable().optional(),
@@ -639,7 +621,9 @@ const productCreateSchema = z.object({
   specifications: z.array(z.object({ name: safeText(80), value: safeText(240) })).max(30).default([]),
   tag: optionalText(40), stockQuantity: z.number().int().min(0).max(10000000).default(0),
   status: z.enum(['draft','published','archived']).default('draft')
-}).refine(v => v.compareAtPriceNgn == null || v.compareAtPriceNgn >= v.priceNgn, { path: ['compareAtPriceNgn'], message: 'Compare-at price must not be lower than the selling price.' });
+});
+const productCreateSchema = productFieldsSchema.refine(v => v.compareAtPriceNgn == null || v.compareAtPriceNgn >= v.priceNgn, { path: ['compareAtPriceNgn'], message: 'Compare-at price must not be lower than the selling price.' });
+const productPatchSchema = productFieldsSchema.partial().refine(v => Object.keys(v).length > 0, 'Provide at least one field.');
 
 function productPatchRow(input) {
   const row = {};
@@ -697,8 +681,16 @@ app.post('/api/v1/admin/products', auth, catalogAdmin, asyncRoute(async (req, re
 
 app.patch('/api/v1/admin/products/:id', auth, catalogAdmin, asyncRoute(async (req, res) => {
   const id = uuidSchema.parse(req.params.id);
-  const input = productCreateSchema.partial().refine(v => Object.keys(v).length > 0, 'Provide at least one field.').parse(req.body);
+  const input = productPatchSchema.parse(req.body);
   if (input.priceNgn !== undefined && input.compareAtPriceNgn !== undefined && input.compareAtPriceNgn != null && input.compareAtPriceNgn < input.priceNgn) throw new HttpError(400, 'INVALID_PRICE', 'Compare-at price must not be lower than the selling price.');
+  if (input.priceNgn !== undefined && input.compareAtPriceNgn === undefined) {
+    const { data: existingPrice, error: existingPriceError } = await productsDb.from('products').select('price_kobo,compare_at_price_kobo').eq('id', id).maybeSingle();
+    if (existingPriceError) throw new HttpError(503, 'PRODUCT_PRICE_CHECK_FAILED', 'The current product pricing could not be checked. Refresh and try again.');
+    if (!existingPrice) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product was not found.');
+    if (existingPrice.compare_at_price_kobo != null && Number(existingPrice.compare_at_price_kobo) < Math.round(input.priceNgn * 100)) {
+      throw new HttpError(400, 'INVALID_PRICE', 'The new selling price exceeds the saved compare-at price. Update both prices together or lower the selling price.');
+    }
+  }
   const { data, error } = await productsDb.from('products').update(productPatchRow(input)).eq('id', id).select(publicProductFields).maybeSingle();
   if (error) throw new HttpError(400, 'PRODUCT_UPDATE_FAILED', 'The product could not be updated. Check its fields and stock reservations.');
   if (!data) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product was not found.');
@@ -762,10 +754,25 @@ const checkoutSchema = z.object({
 }).refine(v => new Set(v.items.map(i => i.productId)).size === v.items.length, { path: ['items'], message: 'Each product should appear only once; quantities are combined by the storefront.' });
 
 app.post('/api/v1/checkout', auth, asyncRoute(async (req, res) => {
+  // Environment kill-switch is always authoritative; saved preferences cannot open checkout on their own.
   if (String(process.env.CHECKOUT_ENABLED).toLowerCase() !== 'true') throw new HttpError(503, 'CHECKOUT_NOT_ENABLED', 'Vine checkout is not open yet. Product, delivery, and payment settings must be confirmed first.');
+  const { data: checkoutSettingRows, error: checkoutSettingsError } = await accountsAdmin.from('vineowner_settings')
+    .select('setting_key,setting_value').in('setting_key', ['commerce','shipping','payments']);
+  if (checkoutSettingsError) throw new HttpError(503, 'CHECKOUT_SETTINGS_UNAVAILABLE', 'Checkout settings could not be verified. Checkout remains closed until the settings database is available.');
+  const checkoutSettings = Object.fromEntries((checkoutSettingRows || []).map(row => [row.setting_key, row.setting_value || {}]));
+  const commerceSettings = checkoutSettings.commerce || {};
+  const shippingSettings = checkoutSettings.shipping || {};
+  const paymentSettings = checkoutSettings.payments || {};
+  if (commerceSettings.checkoutEnabled !== true) throw new HttpError(503, 'CHECKOUT_NOT_ENABLED', 'Checkout is disabled in Vine store settings. Enable the store setting and confirm the Render safety gate before opening checkout.');
   const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
   if (idempotencyKey.length < 8 || idempotencyKey.length > 120) throw new HttpError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'A valid Idempotency-Key header is required to prevent duplicate orders.');
   const input = checkoutSchema.parse(req.body);
+  const maxItemsPerOrder = Number.isInteger(Number(commerceSettings.maxItemsPerOrder)) ? Math.max(1, Math.min(50, Number(commerceSettings.maxItemsPerOrder))) : 50;
+  if (input.items.length > maxItemsPerOrder) throw new HttpError(400, 'ORDER_ITEM_LIMIT_EXCEEDED', `This store allows at most ${maxItemsPerOrder} distinct products per order.`);
+  if (input.paymentMethod === 'paystack' && paymentSettings.paystackEnabled !== true) throw new HttpError(400, 'PAYMENT_METHOD_DISABLED', 'Paystack is not enabled for checkout. Choose another available payment method.');
+  if (input.paymentMethod === 'bank_transfer' && paymentSettings.bankTransferEnabled !== true) throw new HttpError(400, 'PAYMENT_METHOD_DISABLED', 'Bank transfer is not enabled for checkout. Choose another available payment method.');
+  const paymentHoldMinutes = Number(paymentSettings.paymentHoldMinutes ?? 45);
+  if (!Number.isInteger(paymentHoldMinutes) || paymentHoldMinutes < 5 || paymentHoldMinutes > 1440) throw new HttpError(503, 'PAYMENT_HOLD_CONFIGURATION_INVALID', 'Payment hold duration must be a whole number between 5 and 1440 minutes.');
   if (!req.user.email) throw new HttpError(400, 'EMAIL_REQUIRED', 'Your account must have an email address before checkout.');
   const normalizedItems = [...input.items].sort((a,b) => a.productId.localeCompare(b.productId));
   const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ addressId: input.addressId, paymentMethod: input.paymentMethod, items: normalizedItems })).digest('hex');
@@ -785,6 +792,10 @@ app.post('/api/v1/checkout', auth, asyncRoute(async (req, res) => {
   ]);
   if (addressError || profileError) throw new HttpError(503, 'CUSTOMER_DETAILS_UNAVAILABLE', 'Your saved customer details could not be loaded.');
   if (!address) throw new HttpError(400, 'ADDRESS_NOT_FOUND', 'Choose a saved delivery address that belongs to your account.');
+  const coverageStates = Array.isArray(shippingSettings.coverageStates) ? shippingSettings.coverageStates.map(value => String(value).trim().toLowerCase()).filter(Boolean) : [];
+  if (coverageStates.length && !coverageStates.includes(String(address.state || '').trim().toLowerCase())) {
+    throw new HttpError(400, 'DELIVERY_STATE_UNSUPPORTED', 'Vine is not currently delivering to the selected state. Choose another saved address or contact support.');
+  }
 
   const productIds = normalizedItems.map(item => item.productId);
   const { data: productRows, error: productsError } = await productsDb.from('products')
@@ -800,15 +811,24 @@ app.post('/api/v1/checkout', auth, asyncRoute(async (req, res) => {
     return { product_id: product.id, sku_snapshot: product.sku, name_snapshot: product.name, unit_price_kobo: unitPriceKobo, quantity: item.quantity, line_total_kobo: unitPriceKobo * item.quantity };
   });
   const subtotalKobo = items.reduce((sum, item) => sum + item.line_total_kobo, 0);
-  const deliveryFeeKobo = Number.parseInt(process.env.DELIVERY_FEE_KOBO ?? '0', 10);
-  if (!Number.isSafeInteger(deliveryFeeKobo) || deliveryFeeKobo < 0) throw new HttpError(503, 'DELIVERY_CONFIGURATION_INVALID', 'Delivery pricing is not configured correctly.');
+  const minimumOrderNgn = Number(commerceSettings.minOrderNgn ?? 0);
+  if (!Number.isFinite(minimumOrderNgn) || minimumOrderNgn < 0) throw new HttpError(503, 'MINIMUM_ORDER_CONFIGURATION_INVALID', 'The minimum-order setting is invalid.');
+  if (subtotalKobo < Math.round(minimumOrderNgn * 100)) throw new HttpError(400, 'MINIMUM_ORDER_NOT_MET', `The minimum order subtotal is ₦${minimumOrderNgn.toLocaleString('en-NG')}.`);
+  const configuredBaseFeeNgn = shippingSettings.baseFeeNgn;
+  const deliveryFeeCandidate = configuredBaseFeeNgn !== null && configuredBaseFeeNgn !== undefined && configuredBaseFeeNgn !== ''
+    ? Math.round(Number(configuredBaseFeeNgn) * 100)
+    : Number.parseInt(process.env.DELIVERY_FEE_KOBO ?? '0', 10);
+  if (!Number.isSafeInteger(deliveryFeeCandidate) || deliveryFeeCandidate < 0) throw new HttpError(503, 'DELIVERY_CONFIGURATION_INVALID', 'Delivery pricing is not configured correctly.');
+  const freeShippingThresholdNgn = Number(shippingSettings.freeShippingThresholdNgn ?? 0);
+  const freeShippingApplies = shippingSettings.freeShippingEnabled === true && Number.isFinite(freeShippingThresholdNgn) && freeShippingThresholdNgn > 0 && subtotalKobo >= Math.round(freeShippingThresholdNgn * 100);
+  const deliveryFeeKobo = freeShippingApplies ? 0 : deliveryFeeCandidate;
   const totalKobo = subtotalKobo + deliveryFeeKobo;
   if (!Number.isSafeInteger(totalKobo) || totalKobo > 9_000_000_000_000) throw new HttpError(400, 'ORDER_TOTAL_INVALID', 'The order total is outside the supported range.');
 
   const orderId = crypto.randomUUID();
   const reference = `VINE-${orderId.replaceAll('-', '').toUpperCase()}`;
   const reservePayload = items.map(item => ({ product_id: item.product_id, quantity: item.quantity }));
-  const { error: reserveError } = await productsDb.rpc('reserve_vine_inventory', { p_order_id: orderId, p_items: reservePayload, p_ttl_minutes: 45 });
+  const { error: reserveError } = await productsDb.rpc('reserve_vine_inventory', { p_order_id: orderId, p_items: reservePayload, p_ttl_minutes: paymentHoldMinutes });
   if (reserveError) {
     const message = /insufficient stock|product unavailable/i.test(reserveError.message || '') ? 'One or more products do not have enough stock. Refresh your bag and try again.' : 'Stock could not be reserved. Please try again.';
     throw new HttpError(409, 'INVENTORY_RESERVATION_FAILED', message);
@@ -825,7 +845,7 @@ app.post('/api/v1/checkout', auth, asyncRoute(async (req, res) => {
     phone: address.phone || profile?.phone || '', shipping_address: addressSnapshot,
     subtotal_kobo: subtotalKobo, delivery_fee_kobo: deliveryFeeKobo, total_kobo: totalKobo,
     idempotency_key: idempotencyKey, request_fingerprint: fingerprint,
-    expires_at: new Date(Date.now() + 45 * 60 * 1000).toISOString()
+    expires_at: new Date(Date.now() + paymentHoldMinutes * 60 * 1000).toISOString()
   };
   const paymentPayload = { provider: input.paymentMethod, reference, amount_kobo: totalKobo };
   const { data: order, error: createError } = await ordersDb.rpc('create_vine_order_bundle', { p_order: orderPayload, p_items: items, p_payment: paymentPayload });
