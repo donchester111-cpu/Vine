@@ -657,7 +657,11 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-window.VINE_CONFIG = window.VINE_CONFIG || { accountsApiBaseUrl: "https://vine-fnoh.onrender.com", storeApiBaseUrl: "https://vine-store-api.onrender.com", operationsApiBaseUrl: "https://vine-operations-api.onrender.com" };
+(function configureVineApiBases(){
+  const defaults = { accountsApiBaseUrl: "https://vine-fnoh.onrender.com", storeApiBaseUrl: "https://vine-store-api.onrender.com", operationsApiBaseUrl: "https://vine-operations-api.onrender.com" };
+  const supplied = window.VINE_CONFIG && typeof window.VINE_CONFIG === "object" ? window.VINE_CONFIG : {};
+  window.VINE_CONFIG = Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, String(supplied[key] || fallback).trim()]));
+})();
 /* Vine Google OAuth. Use the PUBLIC anon/publishable key from vine_accounts only. */
 window.VINE_SUPABASE_URL = "https://jktuwbgocpixtelfxzwq.supabase.co";
 window.VINE_SUPABASE_ANON_KEY = "sb_publishable_OKdFRUL1MYPA7RBp1Fzz1A_CcodBNso";
