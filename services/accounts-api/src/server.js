@@ -9,6 +9,7 @@ import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { assertVineEmailConfigured, escapeVineHtml, sendVineEmail } from '@vine/shared/email';
 import { emailSchema, optionalText, phoneSchema, safeText, uuidSchema } from '@vine/shared/validation';
 import { registerOwnerAdmin } from './owner-admin.js';
+import { registerGoogleMailOAuthRoutes } from './google-mail-oauth.js';
 
 process.env.SERVICE_NAME = 'vine-accounts-api';
 const { authClient, accountsAdmin } = createAuthContext();
@@ -265,6 +266,7 @@ app.delete('/api/v1/me/addresses/:id', auth, asyncRoute(async (req, res) => {
 }));
 
 registerOwnerAdmin(app, { accountsAdmin, auth });
+registerGoogleMailOAuthRoutes(app);
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { resolveStaffAccess } from '@vine/shared/rbac';
-import { assertVineEmailConfigured, escapeVineHtml, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
+import { assertVineEmailConfigured, escapeVineHtml, getVineEmailProvider, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
 
 
 async function findAuthUserByEmail(accountsAdmin, email) {
@@ -49,13 +49,19 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
 
   app.get('/api/v1/owner/email-provider-status', ...owner, asyncRoute(async (_req, res) => {
     const configured = isVineEmailConfigured();
+    const provider = getVineEmailProvider();
+    const gmailSenderPresent = Boolean(String(process.env.GMAIL_SENDER_EMAIL || '').trim());
     res.json({ data: {
-      provider: configured ? 'resend' : null,
+      provider,
       configured,
-      senderAddressPresent: Boolean(String(process.env.VINE_EMAIL_FROM || '').trim()),
+      senderAddressPresent: Boolean(String(process.env.VINE_EMAIL_FROM || process.env.GMAIL_SENDER_EMAIL || '').trim()),
       message: configured
-        ? 'Email provider settings are present. Resend must still accept the sender domain before delivery can be considered verified.'
-        : 'Email sending is not configured. Add RESEND_API_KEY and VINE_EMAIL_FROM to the Accounts and Operations services.'
+        ? provider === 'google-gmail'
+          ? `Gmail email delivery is configured for ${String(process.env.GMAIL_SENDER_EMAIL).trim()}. Send a real test message to verify delivery.`
+          : 'Resend settings are present. Confirm the sender domain is verified and test a real delivery.'
+        : gmailSenderPresent
+          ? 'The Gmail sender address is set, but the OAuth client and refresh token must be connected in Render.'
+          : 'Email sending is not configured. Connect Google Gmail OAuth or configure a verified Resend sender on the Accounts and Operations services.'
     } });
   }));
 
