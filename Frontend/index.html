@@ -204,6 +204,8 @@ html{background:#fff;scroll-behavior:smooth}body{background:#fff;color:var(--ink
 .account-guest-card .account-auth-note{font-size:10px;color:#849188}
 .account-profile-hero{display:flex;align-items:center;gap:15px;background:#fff;border:1px solid #e8eee9;border-radius:17px;padding:19px 22px;box-shadow:0 4px 16px rgba(13,53,34,.035)}
 .account-avatar{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;background:linear-gradient(145deg,#07884f,#79d9a1);color:#fff;font-size:22px;font-weight:900;box-shadow:0 0 0 4px #ecf8ef}
+.account-avatar{overflow:hidden;padding:0}.account-avatar img{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}.account-photo-picker{display:flex;align-items:center;gap:13px;padding:13px 0 17px;margin-bottom:6px;border-bottom:1px solid #edf2ed}.account-photo-preview{width:66px;height:66px;flex:0 0 66px;overflow:hidden;border-radius:50%;display:grid;place-items:center;background:#e9f7ed;color:#07884f;font-size:24px;font-weight:900;border:2px solid #d9efdf}.account-photo-preview img{width:100%;height:100%;object-fit:cover}.account-photo-copy{min-width:0;flex:1}.account-photo-copy strong{display:block;color:#203a2a;font-size:12px}.account-photo-copy p{font-size:10px;color:#75867a;line-height:1.5;margin:4px 0 8px}.account-photo-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.account-photo-button{border:1px solid #cce4d2;border-radius:9px;background:#f4fbf5;color:#087448;font-size:11px;font-weight:850;padding:9px 12px}.account-photo-status{font-size:10px;color:#087448;line-height:1.45}.account-photo-status.error{color:#b23b2e}
+
 .account-profile-copy{min-width:0;flex:1}
 .account-profile-label{display:block;font-size:9px;letter-spacing:1.2px;font-weight:900;color:#07884f}
 .account-profile-copy h2{font-size:23px;margin:4px 0;color:#13251b;letter-spacing:-.7px;overflow-wrap:anywhere}
@@ -505,7 +507,7 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
       <nav class="account-shortcuts" aria-label="Account sections"><button type="button" data-account-target="profile">◉ <span>Profile</span></button><button type="button" data-account-target="orders">▤ <span>Orders</span></button><button type="button" data-account-target="addresses">⌖ <span>Addresses</span></button><button type="button" data-account-target="saved">♡ <span>Saved finds</span></button><button type="button" data-account-target="reviews">☆ <span>Reviews</span></button><button type="button" data-account-target="questions">? <span>Questions</span></button></nav>
       <div id="accountFeedback" class="account-feedback" role="status" hidden></div>
       <div class="account-content-grid">
-        <section id="accountProfilePanel" class="account-content-card account-profile-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR DETAILS</span><h3>Profile information</h3><p>Keep your contact details up to date.</p></div><span class="account-card-symbol">◉</span></div><form id="accountProfileForm" class="account-form"><label>Full name<input id="accountFullName" name="fullName" autocomplete="name" maxlength="120" required></label><label>Email address<input id="accountEmail" type="email" disabled></label><label>Phone number<input id="accountPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="Add a phone number"></label><button class="account-primary-btn" id="accountSaveProfile" type="submit">Save profile</button></form></section>
+        <section id="accountProfilePanel" class="account-content-card account-profile-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR DETAILS</span><h3>Profile information</h3><p>Keep your contact details up to date.</p></div><span class="account-card-symbol">◉</span></div><div class="account-photo-picker"><div class="account-photo-preview" id="accountPhotoPreview" aria-label="Profile picture preview">V</div><div class="account-photo-copy"><strong>Profile picture</strong><p>Choose a photo from your phone. Vine resizes it securely before upload.</p><div class="account-photo-actions"><input type="file" id="accountAvatarFile" accept="image/jpeg,image/png,image/webp" hidden><button class="account-photo-button" type="button" id="accountChooseAvatar">Choose photo</button><span class="account-photo-status" id="accountAvatarStatus" role="status" aria-live="polite">JPG, PNG or WebP · up to 8 MB</span></div></div></div><form id="accountProfileForm" class="account-form"><label>Full name<input id="accountFullName" name="fullName" autocomplete="name" maxlength="120" required></label><label>Email address<input id="accountEmail" type="email" disabled></label><label>Phone number<input id="accountPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="Add a phone number"></label><button class="account-primary-btn" id="accountSaveProfile" type="submit">Save profile</button></form></section>
         <section id="accountOrdersPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">PURCHASE HISTORY</span><h3>Your orders</h3><p>Order and payment status returned by Vine's Store API.</p></div><button type="button" class="storefront-text-btn" id="accountRefreshOrders">Refresh</button></div><div id="accountOrdersList" class="account-order-list"><div class="account-inline-loading">Loading order history…</div></div></section>
         <section id="accountAddressesPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">DELIVERY DETAILS</span><h3>Saved addresses</h3><p>Reuse these details during checkout.</p></div><span class="account-card-symbol">⌖</span></div><div id="accountAddressesList" class="account-address-list"><div class="account-inline-loading">Loading saved addresses…</div></div><details class="account-add-address"><summary>＋ Add a new address</summary><form id="accountAddressForm" class="account-form address-form"><label>Recipient name<input id="addrRecipient" required maxlength="120" autocomplete="name"></label><label>Phone number<input id="addrPhone" required maxlength="30" inputmode="tel" autocomplete="tel"></label><label class="address-form-wide">Street address<input id="addrLine1" required maxlength="240" autocomplete="address-line1"></label><label class="address-form-wide">Apartment, hostel or extra address <span>(optional)</span><input id="addrLine2" maxlength="240" autocomplete="address-line2"></label><label>City / town<input id="addrCity" required maxlength="100" autocomplete="address-level2"></label><label>State / FCT<input id="addrState" required maxlength="100" autocomplete="address-level1"></label><label>Postal code <span>(optional)</span><input id="addrPostal" maxlength="20" autocomplete="postal-code"></label><label>Landmark <span>(optional)</span><input id="addrLandmark" maxlength="200"></label><label class="address-default-check"><input id="addrDefault" type="checkbox"> Set as my default address</label><button type="submit" class="account-primary-btn" id="accountSaveAddress">Save address</button></form></details></section>
         <section id="accountSavedPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR COLLECTION</span><h3>Saved finds</h3><p>Saved products linked to your signed-in Vine account.</p></div><button type="button" class="storefront-text-btn" onclick="navigateView('home')">Explore products</button></div><div id="accountSavedGrid" class="account-saved-grid"></div></section>
@@ -657,11 +659,7 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-(function configureVineApiBases(){
-  const defaults = { accountsApiBaseUrl: "https://vine-fnoh.onrender.com", storeApiBaseUrl: "https://vine-store-api.onrender.com", operationsApiBaseUrl: "https://vine-operations-api.onrender.com" };
-  const supplied = window.VINE_CONFIG && typeof window.VINE_CONFIG === "object" ? window.VINE_CONFIG : {};
-  window.VINE_CONFIG = Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, String(supplied[key] || fallback).trim()]));
-})();
+window.VINE_CONFIG = window.VINE_CONFIG || { accountsApiBaseUrl: "https://vine-fnoh.onrender.com", storeApiBaseUrl: "https://vine-store-api.onrender.com", operationsApiBaseUrl: "https://vine-operations-api.onrender.com" };
 /* Vine Google OAuth. Use the PUBLIC anon/publishable key from vine_accounts only. */
 window.VINE_SUPABASE_URL = "https://jktuwbgocpixtelfxzwq.supabase.co";
 window.VINE_SUPABASE_ANON_KEY = "sb_publishable_OKdFRUL1MYPA7RBp1Fzz1A_CcodBNso";
@@ -715,10 +713,24 @@ window.VineSupabaseAuth = (function () {
     if (options.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     if (useAuth && session?.accessToken) headers.set('Authorization', `Bearer ${session.accessToken}`);
     let response;
+    const controller = new AbortController();
+    const catalogueRequest = !useAuth && /\/api\/v1\/(?:products|categories)(?:[/?]|$)/.test(path);
+    const timeoutId = setTimeout(() => controller.abort(), catalogueRequest ? 12000 : 25000);
     try {
-      response = await fetch(`${base}${path}`, { ...options, headers, cache: 'no-store' });
-    } catch {
+      response = await fetch(`${base}${path}`, {
+        ...options,
+        headers,
+        // Public GET endpoints can use the browser's normal HTTP cache; private requests never do.
+        cache: options.cache || (useAuth ? 'no-store' : 'default'),
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error(catalogueRequest ? 'The Vine catalogue is taking too long to respond. Showing saved products where available.' : 'The request timed out. Please try again.');
+      }
       throw new Error('Vine could not reach the server. Check your connection and try again.');
+    } finally {
+      clearTimeout(timeoutId);
     }
     let payload = null;
     if (response.status !== 204) {
@@ -783,6 +795,7 @@ window.VineSupabaseAuth = (function () {
     },
     async profile() { return (await request(accountsBase, '/api/v1/me', {}, true)).data; },
     async updateProfile(input) { return (await request(accountsBase, '/api/v1/me/profile', { method: 'PATCH', body: JSON.stringify(input) }, true)).data; },
+    async uploadProfileAvatar({ mimeType, dataBase64 }) { return (await request(accountsBase, '/api/v1/me/profile-avatar', { method: 'POST', body: JSON.stringify({ mimeType, dataBase64 }) }, true)).data; },
     async addresses() { return (await request(accountsBase, '/api/v1/me/addresses', {}, true)).data; },
     async createAddress(input) { return (await request(accountsBase, '/api/v1/me/addresses', { method: 'POST', body: JSON.stringify(input) }, true)).data; },
     async updateAddress(id, input) { return (await request(accountsBase, `/api/v1/me/addresses/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }, true)).data; },
@@ -882,7 +895,7 @@ function renderProducts(){
  subheading.textContent=searchTerm?`Results for “${searchTerm}”`:showOnlySaved?"Your favourite products":"Great prices on live Vine products";
  if(catalogueStatus==="loading"&&!products.length){$v("catalogueStatus").textContent="Loading the live Vine catalogue…";grid.innerHTML='<div class="no-results"><strong>Finding your next favourite…</strong>Connecting to the Vine store.</div>';return;}
  if(catalogueStatus==="offline"&&!products.length){$v("catalogueStatus").innerHTML=`<div class="catalogue-error"><strong>We couldn’t reach the Vine catalogue.</strong><br>${safeText(catalogueError||"Check your connection and retry.")}<button type="button" onclick="loadVineCatalogue()">Try again</button></div>`;grid.innerHTML="";return;}
- $v("catalogueStatus").textContent=catalogueStatus==="connected"?`${catalogueTotal.toLocaleString("en-NG")} ${searchTerm||activeCategory!=="all"?"result":"product"}${catalogueTotal===1?"":"s"}${searchTerm||activeCategory!=="all"?"":" in the Vine catalogue"}`:"";
+ $v("catalogueStatus").textContent=catalogueStatus==="connected"?`${catalogueTotal.toLocaleString("en-NG")} ${searchTerm||activeCategory!=="all"?"result":"product"}${catalogueTotal===1?"":"s"}${searchTerm||activeCategory!=="all"?"":" in the Vine catalogue"}`:catalogueStatus==="stale"?"Showing saved products. Vine is refreshing availability…":"";
  let sourceProducts=showOnlySaved?[...productCache.values()]:products;
  let list=sourceProducts.filter(p=>(activeCategory==="all"||p.categorySlug===activeCategory)&&(!showOnlySaved||saved.has(String(p.id)))&&(!searchTerm||`${p.name} ${p.category} ${p.description||""}`.toLowerCase().includes(searchTerm.toLowerCase())));
  if(!list.length){grid.innerHTML=`<div class="no-results"><strong>${showOnlySaved?"No saved finds yet.":searchTerm?"No matches found.":activeCategory!=="all"?"No products in this category yet.":catalogueStatus==="empty"?"Vine’s catalogue is being prepared.":"No products in this category yet."}</strong>${showOnlySaved?"Tap the heart on a product to save it here.":searchTerm?"Try a shorter search or another keyword.":"Published products will appear here as soon as they are available."}</div>`;$v("loadMoreProducts").hidden=true;return;}
@@ -1025,9 +1038,9 @@ $v("checkoutBtn").addEventListener("click",openCheckout);
 
 function mapVineProduct(p){return {id:String(p.id),slug:p.slug||"",name:p.name||"Unnamed product",category:p.category?.name||"Everyday",categorySlug:p.category?.slug||"",price:Number(p.priceNgn||0),old:Number(p.compareAtPriceNgn||0),rating:Number(p.rating||0),reviews:Number(p.reviewCount||0),tag:p.tag||"",image:p.imageUrl||p.galleryUrls?.[0]||categoryImage(p.category),galleryUrls:Array.isArray(p.galleryUrls)?p.galleryUrls:[],specifications:Array.isArray(p.specifications)?p.specifications:[],description:p.description||"",sku:p.sku||"",availableQuantity:Number(p.availableQuantity||0)}}
 async function loadVineCategories(){
- if(!window.VineAPI?.configured){activeCategories=[];catalogueStatus="offline";catalogueError="The API base URLs are not configured in this storefront.";renderCategoryUI();renderProducts();return;}
- try{const categories=await window.VineAPI.categories();activeCategories=Array.isArray(categories)?categories.filter(c=>c&&c.slug&&c.name):[];renderCategoryUI();}
- catch(error){activeCategories=[];renderCategoryUI();showToast(error?.message||"Vine categories could not be loaded.");}
+ if(!window.VineAPI?.configured){if(!activeCategories.length){catalogueStatus="offline";catalogueError="The API base URLs are not configured in this storefront.";}renderCategoryUI();renderProducts();return;}
+ try{const categories=await window.VineAPI.categories();activeCategories=Array.isArray(categories)?categories.filter(c=>c&&c.slug&&c.name):[];saveVineState("vine_categories_cache_v1",activeCategories);renderCategoryUI();}
+ catch(error){if(!activeCategories.length){catalogueError=error?.message||"Vine categories could not be loaded.";catalogueStatus="offline";}renderCategoryUI();}
 }
 async function loadVineCatalogue(options={}){
  const requestId=++catalogueRequestId;
@@ -1037,7 +1050,19 @@ async function loadVineCatalogue(options={}){
  const requestedCategory=options.category!==undefined?String(options.category):activeCategory;
  const requestedSort=options.sort!==undefined?String(options.sort):$v("sortSelect").value;
  if(!window.VineAPI?.configured){catalogueStatus="offline";catalogueError="The Vine API addresses are not configured.";products.splice(0,products.length);renderProducts();return;}
- if(!append){catalogueStatus="loading";catalogueError="";$v("catalogueStatus").textContent="Loading the live Vine catalogue…";if(!products.length)renderProducts();}
+ if(!append){
+  catalogueStatus=products.length?"stale":"loading";catalogueError="";
+  const cached=[...productCache.values()].filter(p=>p&&p.id&&(requestedCategory==="all"||p.categorySlug===requestedCategory)&&(!requestedSearch||`${p.name||""} ${p.category||""} ${p.description||""}`.toLowerCase().includes(requestedSearch.toLowerCase())));
+  if(cached.length){
+   const sortValue=requestedSort;
+   if(sortValue==="price_asc")cached.sort((a,b)=>Number(a.price||0)-Number(b.price||0));
+   else if(sortValue==="price_desc")cached.sort((a,b)=>Number(b.price||0)-Number(a.price||0));
+   else if(sortValue==="rating")cached.sort((a,b)=>Number(b.rating||0)-Number(a.rating||0));
+   products.splice(0,products.length,...cached.slice(0,48));catalogueTotal=Math.max(catalogueTotal,cached.length);
+  }
+  $v("catalogueStatus").textContent=cached.length?"Showing saved products while Vine refreshes the catalogue…":"Loading the live Vine catalogue…";
+  renderProducts();
+ }
  try{
   const result=await window.VineAPI.products({search:requestedSearch,category:requestedCategory,sort:requestedSort,page:requestedPage,limit:48});
   if(requestId!==catalogueRequestId)return;
@@ -1051,12 +1076,16 @@ async function loadVineCatalogue(options={}){
   saveVineState("vine_cart_v3",cart);
   renderProducts();updateCart();
   if(removedLegacy)showToast("Your bag has been refreshed to match Vine’s live catalogue.");
- }catch(error){if(requestId!==catalogueRequestId)return;catalogueStatus="offline";catalogueError=error?.message||"The live catalogue is temporarily unavailable.";products.splice(0,products.length);catalogueTotal=0;catalogueHasMore=false;renderProducts();updateCart();}
+ }catch(error){if(requestId!==catalogueRequestId)return;catalogueError=error?.message||"The live catalogue is temporarily unavailable.";catalogueStatus=products.length?"stale":"offline";if(!products.length){catalogueTotal=0;catalogueHasMore=false;}renderProducts();updateCart();}
 }
 async function handlePaymentReturn(){const params=new URLSearchParams(location.search);const reference=params.get("reference");if(!reference)return;openAccount();setAuthMessage("Checking the order status with Vine…");if(!window.VineAPI?.isSignedIn()){setAuthMessage("The payment return was received. Sign in with the same account to check your order status.");return}if(history.replaceState)history.replaceState({},document.title,location.pathname+location.hash);let attempts=0;while(attempts<12){attempts++;try{const result=await window.VineAPI.paymentStatus(reference);if(result.paymentStatus==="paid"){const completedPending=pendingCheckout();savePendingCheckout(null);if(completedPending?.cartSnapshot){completedPending.cartSnapshot.forEach(item=>delete cart[String(item.productId)]);if(Array.isArray(selectedCartIds))selectedCartIds=selectedCartIds.filter(id=>Number(cart[id]||0)>0);saveCartSelection()}updateCart();setAuthMessage(`Payment confirmed for ${result.orderNumber}. Thank you for shopping with Vine.`);return}if(result.paymentStatus==="review_required"||result.orderStatus==="payment_review"){setAuthMessage(`Order ${result.orderNumber} needs a manual payment review. Please do not pay again; contact Vine support with the order number.`,true);return}setAuthMessage(`Order ${result.orderNumber} is ${result.paymentStatus}. Vine is waiting for verified confirmation. We will keep checking for a short time.`)}catch(err){setAuthMessage(err.message,true);return}await new Promise(resolve=>setTimeout(resolve,4000))}setAuthMessage("Vine has not received final payment confirmation yet. Do not pay again. Your order will appear in your order history when the provider webhook is processed.")}
 setupAuthView();updateAccountButton();updatePendingCheckoutView();loadStorefrontRuntimeConfig();
-try{const cached=loadVineState("vine_catalogue_cache_v1",[]);if(Array.isArray(cached))cached.forEach(p=>{if(p&&p.id)productCache.set(String(p.id),p)});}catch{}
-renderProducts();updateCart();loadVineCategories();loadVineCatalogue().then(()=>openSharedProductFromUrl());handlePaymentReturn();
+try{
+ const cached=loadVineState("vine_catalogue_cache_v1",[]);
+ if(Array.isArray(cached)){cached.forEach(p=>{if(p&&p.id)productCache.set(String(p.id),p)});const initial=[...productCache.values()].filter(p=>p&&p.id).slice(0,48);if(initial.length){products.splice(0,products.length,...initial);catalogueStatus="stale";catalogueTotal=initial.length;}}
+ const cachedCategories=loadVineState("vine_categories_cache_v1",[]);if(Array.isArray(cachedCategories))activeCategories=cachedCategories.filter(c=>c&&c.slug&&c.name);
+}catch{}
+renderCategoryUI();renderProducts();updateCart();loadVineCategories();loadVineCatalogue().then(()=>openSharedProductFromUrl());handlePaymentReturn();
 const legacyMenuBtn=document.getElementById("menuBtn");if(legacyMenuBtn)legacyMenuBtn.addEventListener("click",()=>document.getElementById("categories").scrollIntoView({behavior:"smooth"}));
 if(document.getElementById("year"))document.getElementById("year").textContent=new Date().getFullYear();
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDetailImageLightbox();closeCart();closeQuickView()}else if(e.key==='ArrowLeft'&&!$v('detailImageLightbox').hidden){setDetailImage(detailImageIndex-1)}else if(e.key==='ArrowRight'&&!$v('detailImageLightbox').hidden){setDetailImage(detailImageIndex+1)}});
@@ -1138,10 +1167,10 @@ async function loadCategoryPageProducts(slug,append=false){
   if(!window.VineAPI?.configured){categoryFocusedSlug=slug;categoryProducts=[];categoryLoading=false;renderFullCategoryView();return;}
   categoryFocusedSlug=slug;categoryLoading=true;
   const nextPage=append?categoryPage+1:1;
-  if(!append)categoryProducts=[];
+  if(!append)categoryProducts=[...productCache.values()].filter(p=>String(p.categorySlug||"")===String(slug)).slice(0,24);
   renderFullCategoryView();
   $v("categoryProductsSection").hidden=false;
-  $v("categoryProductsGrid").innerHTML='<div class="category-view-empty">Loading products from the Vine catalogue…</div>';
+  if(!categoryProducts.length)$v("categoryProductsGrid").innerHTML='<div class="category-view-empty">Loading products from the Vine catalogue…</div>';
   try{
     const result=await window.VineAPI.products({search:"",category:slug,sort:"featured",page:nextPage,limit:24});
     const rows=(result.products||[]).map(mapVineProduct);
@@ -1192,6 +1221,12 @@ function accountStatus(value){const s=String(value||"unknown").toLowerCase();con
 function accountInitials(name,email){const bits=String(name||email||"Vine customer").trim().split(/[\s@._-]+/).filter(Boolean);return bits.slice(0,2).map(s=>s[0]).join("").toUpperCase()||"V";}
 function setAccountGuest(signed){$v("accountGuest").hidden=!!signed;$v("accountDashboard").hidden=!signed;}
 function launchCustomerAuth(mode){authMode=mode||"login";setAuthMessage("");setupAuthView();showModal("authBackdrop");}
+function renderAccountAvatar(name,email,avatarUrl){
+ const el=$v("accountAvatar"),preview=$v("accountPhotoPreview");if(!el)return;
+ const initials=accountInitials(name,email),url=String(avatarUrl||"").trim();
+ if(url.startsWith("https://")){const image=`<img src="${safeText(url)}" alt="${safeText(name||"Vine customer")}'s profile picture" onerror="this.parentElement.textContent='${safeText(initials)}'">`;el.innerHTML=image;if(preview)preview.innerHTML=image;}
+ else{el.textContent=initials;if(preview)preview.textContent=initials;}
+}
 function accountScrollTo(section){const ids={profile:"accountProfilePanel",orders:"accountOrdersPanel",addresses:"accountAddressesPanel",saved:"accountSavedPanel",reviews:"accountReviewsPanel",questions:"accountQuestionsPanel"};const el=$v(ids[section]||ids.profile);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});}
 async function loadAccountDashboard(){
   const requestId=++accountRequestId;
@@ -1209,7 +1244,7 @@ async function loadAccountDashboard(){
   accountAddresses=addressesResult.status==="fulfilled"&&Array.isArray(addressesResult.value)?addressesResult.value:[];
   accountOrders=ordersResult.status==="fulfilled"&&Array.isArray(ordersResult.value)?ordersResult.value:[];
   const sess=window.VineAPI.getSession()?.user||{},name=accountProfile?.full_name||sess.full_name||sess.user_metadata?.full_name||sess.user_metadata?.name||"Vine customer",email=accountProfile?.email||sess.email||"";
-  $v("accountDisplayName").textContent=name;$v("accountDisplayEmail").textContent=email;$v("accountAvatar").textContent=accountInitials(name,email);
+  $v("accountDisplayName").textContent=name;$v("accountDisplayEmail").textContent=email;renderAccountAvatar(name,email,accountProfile?.avatar_url);$v("accountAvatarStatus").textContent="JPG, PNG or WebP · up to 8 MB";$v("accountAvatarStatus").classList.remove("error");
   $v("accountFullName").value=accountProfile?.full_name||(name==="Vine customer"?"":name);
   $v("accountEmail").value=email;$v("accountPhone").value=accountProfile?.phone||"";
   $v("accountOrderCount").textContent=ordersResult.status==="fulfilled"?String(accountOrders.length):"—";
@@ -1270,8 +1305,34 @@ async function refreshAccountOrders(){
 }
 async function saveAccountProfile(event){
   event.preventDefault();const button=$v("accountSaveProfile");button.disabled=true;button.textContent="Saving…";
-  try{await window.VineAPI.updateProfile({fullName:$v("accountFullName").value.trim(),phone:$v("accountPhone").value.trim()||null});const profile=await window.VineAPI.profile();accountProfile=profile;$v("accountDisplayName").textContent=profile.full_name||"Vine customer";$v("accountDisplayEmail").textContent=profile.email||$v("accountEmail").value;$v("accountAvatar").textContent=accountInitials(profile.full_name,profile.email);accountMessage("Your profile has been updated.");showToast("Profile saved.");}
+  try{await window.VineAPI.updateProfile({fullName:$v("accountFullName").value.trim(),phone:$v("accountPhone").value.trim()||null});const profile=await window.VineAPI.profile();accountProfile=profile;$v("accountDisplayName").textContent=profile.full_name||"Vine customer";$v("accountDisplayEmail").textContent=profile.email||$v("accountEmail").value;renderAccountAvatar(profile.full_name,profile.email,profile.avatar_url);accountMessage("Your profile has been updated.");showToast("Profile saved.");}
   catch(e){accountMessage(e.message||"Your profile could not be saved.",true)}finally{button.disabled=false;button.textContent="Save profile";}
+}
+async function compressProfilePhoto(file){
+ if(!file||!/^image\/(jpeg|png|webp)$/i.test(file.type))throw new Error("Choose a JPG, PNG or WebP image.");
+ if(file.size>8*1024*1024)throw new Error("Choose an image smaller than 8 MB.");
+ let bitmap;
+ try{bitmap=await createImageBitmap(file);}catch{throw new Error("This image could not be opened. Try another photo.");}
+ try{
+  const side=Math.min(bitmap.width,bitmap.height);if(!side)throw new Error("This image is empty.");
+  const canvas=document.createElement("canvas");canvas.width=512;canvas.height=512;const ctx=canvas.getContext("2d");
+  const sx=(bitmap.width-side)/2,sy=(bitmap.height-side)/2;ctx.drawImage(bitmap,sx,sy,side,side,0,0,512,512);
+  let dataUrl=canvas.toDataURL("image/jpeg",0.82);
+  if(dataUrl.length>680000){canvas.width=384;canvas.height=384;ctx.drawImage(bitmap,sx,sy,side,side,0,0,384,384);dataUrl=canvas.toDataURL("image/jpeg",0.76);}
+  const dataBase64=dataUrl.split(",")[1]||"";if(!dataBase64||dataBase64.length>700000)throw new Error("This photo is too large after compression. Choose another image.");
+  return {mimeType:"image/jpeg",dataBase64,previewUrl:dataUrl};
+ }finally{bitmap.close?.();}
+}
+async function uploadAccountAvatar(event){
+ const file=event.target.files?.[0];event.target.value="";if(!file)return;
+ const choose=$v("accountChooseAvatar"),status=$v("accountAvatarStatus"),oldUrl=accountProfile?.avatar_url||"";choose.disabled=true;status.classList.remove("error");status.textContent="Preparing your photo…";
+ try{
+  if(!window.VineAPI?.isSignedIn())throw new Error("Sign in before adding a profile picture.");
+  const packed=await compressProfilePhoto(file);$v("accountPhotoPreview").innerHTML=`<img src="${packed.previewUrl}" alt="Selected profile picture preview">`;status.textContent="Uploading securely…";
+  const profile=await window.VineAPI.uploadProfileAvatar({mimeType:packed.mimeType,dataBase64:packed.dataBase64});accountProfile={...accountProfile,...profile};
+  renderAccountAvatar(accountProfile.full_name||$v("accountFullName").value,accountProfile.email||$v("accountEmail").value,accountProfile.avatar_url);status.textContent="Profile picture saved.";accountMessage("Your profile picture has been saved to your Vine account.");showToast("Profile picture saved.");
+ }catch(error){renderAccountAvatar(accountProfile?.full_name||$v("accountFullName").value,accountProfile?.email||$v("accountEmail").value,oldUrl);status.textContent=error?.message||"Your photo could not be saved.";status.classList.add("error");accountMessage(status.textContent,true);}
+ finally{choose.disabled=false;}
 }
 async function createAccountAddress(event){
   event.preventDefault();const button=$v("accountSaveAddress");button.disabled=true;button.textContent="Saving address…";
@@ -1332,6 +1393,8 @@ $v("cartPageCheckout").addEventListener("click",()=>{if(!readCartSnapshot().leng
 $v("accountGuestSignIn").addEventListener("click",()=>launchCustomerAuth("login"));
 $v("accountGuestCreate").addEventListener("click",()=>launchCustomerAuth("signup"));
 $v("accountProfileForm").addEventListener("submit",saveAccountProfile);
+$v("accountChooseAvatar").addEventListener("click",()=>$v("accountAvatarFile").click());
+$v("accountAvatarFile").addEventListener("change",uploadAccountAvatar);
 $v("accountAddressForm").addEventListener("submit",createAccountAddress);
 $v("accountAddressesList").addEventListener("click",accountAddressAction);
 $v("accountRefreshOrders").addEventListener("click",refreshAccountOrders);
