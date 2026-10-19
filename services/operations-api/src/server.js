@@ -24,6 +24,7 @@ const deliveryAdmin = requirePermission(accountsAdmin, 'deliveries.manage', ['ow
 const analyticsAdmin = requirePermission(accountsAdmin, 'analytics.view', ['owner', 'admin', 'operations']);
 const notificationsView = requirePermission(accountsAdmin, 'notifications.view', ['owner', 'admin', 'operations', 'support']);
 const notificationsManage = requirePermission(accountsAdmin, 'notifications.manage', ['owner', 'admin', 'operations']);
+const integrationsView = requirePermission(accountsAdmin, 'integrations.view', ['owner', 'admin', 'operations']);
 
 function safeProviderMessage(message) {
   return String(message || '').slice(0, 500).replace(/(sk_[a-zA-Z0-9]+|Bearer\s+\S+)/g, '[redacted]');
@@ -68,6 +69,13 @@ async function addAudit({ actorId = null, actorType = 'system', action, entityTy
 }
 
 async function enqueueOrderNotice(order, statusKey) {
+  const { data: emailSettingsRow, error: emailSettingsError } = await accountsAdmin.from('vineowner_settings')
+    .select('setting_value').eq('setting_key', 'notifications').maybeSingle();
+  if (emailSettingsError) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'owner_notification_setting_unavailable', code: emailSettingsError.code || 'DB_ERROR' }));
+  } else if (emailSettingsRow?.setting_value?.orderEmailsEnabled === false) {
+    return; // Owner has explicitly disabled transactional order email notifications.
+  }
   const dedupeKey = `order:${order.id}:${statusKey}:email`;
   const { error } = await operationsDb.from('notification_jobs').upsert({
     dedupe_key: dedupeKey, order_id: order.id, channel: 'email',
@@ -307,11 +315,19 @@ app.post('/api/v1/payments/initialize', auth, asyncRoute(async (req, res) => {
   const payment = paymentRows[0];
   if (Number(payment.amount_kobo) !== Number(order.total_kobo) || payment.currency !== 'NGN') throw new HttpError(409, 'PAYMENT_AMOUNT_MISMATCH', 'The order total and payment amount do not match. Contact Vine support.');
 
+  const { data: paymentSettingsRow, error: paymentSettingsError } = await accountsAdmin.from('vineowner_settings')
+    .select('setting_value').eq('setting_key', 'payments').maybeSingle();
+  if (paymentSettingsError) throw new HttpError(503, 'PAYMENT_SETTINGS_UNAVAILABLE', 'Payment settings could not be verified. Please contact Vine support.');
+  const paymentSettings = paymentSettingsRow?.setting_value || {};
+  if (payment.provider === 'paystack' && paymentSettings.paystackEnabled !== true) throw new HttpError(409, 'PAYMENT_METHOD_DISABLED', 'Paystack is currently disabled by the store owner.');
+  if (payment.provider === 'bank_transfer' && paymentSettings.bankTransferEnabled !== true) throw new HttpError(409, 'PAYMENT_METHOD_DISABLED', 'Bank transfer is currently disabled by the store owner.');
+
   if (payment.provider === 'bank_transfer') {
-    const bankName = String(process.env.BANK_TRANSFER_BANK_NAME || '').trim();
-    const accountName = String(process.env.BANK_TRANSFER_ACCOUNT_NAME || '').trim();
-    const accountNumber = String(process.env.BANK_TRANSFER_ACCOUNT_NUMBER || '').trim();
-    if (!bankName || !accountName || !/^\d{10}$/.test(accountNumber)) throw new HttpError(503, 'BANK_TRANSFER_NOT_CONFIGURED', 'Bank-transfer instructions are not configured yet. Please contact Vine support.');
+    // Owner-entered receiving details are safe public instructions; Render env values take precedence.
+    const bankName = String(process.env.BANK_TRANSFER_BANK_NAME || paymentSettings.bankName || '').trim();
+    const accountName = String(process.env.BANK_TRANSFER_ACCOUNT_NAME || paymentSettings.accountName || '').trim();
+    const accountNumber = String(process.env.BANK_TRANSFER_ACCOUNT_NUMBER || paymentSettings.accountNumber || '').trim();
+    if (!bankName || !accountName || !/^\d{10}$/.test(accountNumber)) throw new HttpError(503, 'BANK_TRANSFER_NOT_CONFIGURED', 'Bank-transfer instructions are not configured yet. Please configure the public receiving account or contact Vine support.');
     const now = new Date().toISOString();
     const { error: updatePaymentError } = await ordersDb.from('payments').update({ status: 'awaiting_transfer', updated_at: now }).eq('id', payment.id).neq('status','paid');
     const { error: updateOrderError } = await ordersDb.from('orders').update({ payment_status: 'pending_verification', updated_at: now }).eq('id', order.id).neq('payment_status','paid');
@@ -330,6 +346,32 @@ app.post('/api/v1/payments/initialize', auth, asyncRoute(async (req, res) => {
   if (saveError) throw new HttpError(503, 'PAYMENT_SAVE_FAILED', 'Payment was started but its secure checkout link could not be saved. Contact Vine support before retrying.');
   await addAudit({ actorId: req.user.id, actorType: 'customer', action: 'payment.paystack_initialized', entityType: 'order', entityId: order.id, requestId: req.id, metadata: { provider: 'paystack' } });
   res.json({ data: { method: 'paystack', status: 'pending', authorizationUrl: initialized.authorization_url, reference: payment.reference } });
+}));
+
+app.get('/api/v1/admin/integration-status', auth, integrationsView, asyncRoute(async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ data: {
+    paystackConfigured: Boolean(String(process.env.PAYSTACK_SECRET_KEY || '').trim()),
+    emailProviderConfigured: isVineEmailConfigured(),
+    smsProviderConfigured: Boolean(String(process.env.SMS_PROVIDER || '').trim()),
+    checkoutSafetyGate: String(process.env.CHECKOUT_ENABLED || '').toLowerCase() === 'true'
+  } });
+}));
+
+app.get('/api/v1/admin/payments', auth, paymentAdmin, asyncRoute(async (req, res) => {
+  const limit = clampInt(req.query.limit, 50, 1, 100);
+  const { data: rows, error } = await ordersDb.from('payments')
+    .select('id,order_id,provider,reference,amount_kobo,currency,status,paid_at,created_at,updated_at')
+    .order('created_at', { ascending: false }).limit(limit);
+  if (error) throw new HttpError(503, 'PAYMENTS_UNAVAILABLE', 'Payment records could not be loaded.');
+  const orderIds = [...new Set((rows || []).map(row => row.order_id).filter(Boolean))];
+  const { data: orderRows, error: orderError } = orderIds.length
+    ? await ordersDb.from('orders').select('id,order_number,email,status,payment_status,total_kobo').in('id', orderIds)
+    : { data: [], error: null };
+  if (orderError) throw new HttpError(503, 'PAYMENT_ORDERS_UNAVAILABLE', 'Payment records loaded, but linked orders could not be loaded.');
+  const orderMap = new Map((orderRows || []).map(order => [order.id, order]));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ data: (rows || []).map(row => ({ ...row, amount_kobo: Number(row.amount_kobo), order: orderMap.get(row.order_id) || null })) });
 }));
 
 app.post('/api/v1/admin/payments/:id/confirm-bank-transfer', auth, paymentAdmin, asyncRoute(async (req, res) => {
@@ -440,9 +482,7 @@ app.get('/api/v1/admin/notifications', auth, notificationsView, asyncRoute(async
   const limit = clampInt(req.query.limit, 50, 1, 100);
   const { data, error } = await operationsDb.from('notification_jobs').select('id,order_id,channel,template_key,status,attempts,available_at,last_error_code,created_at,updated_at').order('created_at', { ascending: false }).limit(limit);
   if (error) throw new HttpError(503, 'NOTIFICATIONS_UNAVAILABLE', 'Notification jobs could not be loaded.');
-  const emailConfigured = isVineEmailConfigured();
-  const emailProvider = getVineEmailProvider();
-  res.json({ data: data || [], delivery: { provider: emailProvider, configured: emailConfigured, workerEnabled: emailConfigured, message: emailConfigured ? `Transactional email delivery is enabled through ${emailProvider}. Sent and failed messages are recorded here.` : 'Transactional email delivery is disabled until Google Gmail OAuth or a verified Resend sender is configured on this Operations service.' } });
+  res.json({ data: data || [], delivery: { provider: isVineEmailConfigured() ? 'resend' : null, configured: isVineEmailConfigured(), workerEnabled: isVineEmailConfigured(), message: isVineEmailConfigured() ? 'Transactional email delivery is enabled. Sent and failed messages are recorded here.' : 'Transactional email delivery is disabled until RESEND_API_KEY and VINE_EMAIL_FROM are configured on this Operations service.' } });
 }));
 
 app.post('/api/v1/admin/notifications/:id/requeue', auth, notificationsManage, asyncRoute(async (req, res) => {
