@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { z } from 'zod';
 import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
@@ -17,6 +18,7 @@ const app = express();
 applySecurity(app, { requestLimit: 180 });
 app.use(express.json({ limit: '128kb' }));
 const auth = requireAuth(authClient);
+const storefrontHtmlPath = fileURLToPath(new URL('../../../Frontend/index.html', import.meta.url));
 // Define upload middleware before registering any route that references it.
 // Keeping these constants near app setup prevents a temporal-dead-zone crash at startup.
 const productImageBucket = String(process.env.VINE_PRODUCT_IMAGES_BUCKET || 'vine-product-images').trim();
@@ -41,6 +43,15 @@ function toPublicProduct(row) {
     category: row.category ? { id: row.category.id, name: row.category.name, slug: row.category.slug } : null
   };
 }
+
+app.get(['/','/index.html'], (_req, res, next) => {
+  // Serve the actual storefront from the Store API root as a fallback, so this
+  // Render URL opens the shopping page instead of a status JSON or blank not-found page.
+  // Keep a separate static-site deployment supported; both copies use the same APIs.
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Content-Security-Policy', "default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://accounts.google.com; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-src 'self' https:; font-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self' https:; upgrade-insecure-requests");
+  res.sendFile(storefrontHtmlPath, error => { if (error && !res.headersSent) next(error); });
+});
 
 app.get('/health', sendHealth);
 app.get('/ready', asyncRoute(async (_req, res) => {
@@ -123,7 +134,12 @@ app.get('/api/v1/admin/categories', auth, catalogView, asyncRoute(async (_req, r
 
 app.get('/api/v1/products', asyncRoute(async (req, res) => {
   const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
-  if (expiryError) throw new HttpError(503, 'INVENTORY_UNAVAILABLE', 'Product availability could not be refreshed.');
+  // Expired-reservation cleanup must not make an otherwise readable storefront go blank.
+  // A cleanup error is logged without database details; inventory changes remain guarded
+  // by the checkout/reservation routines and the product list still applies stock safety.
+  if (expiryError) {
+    console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inventory_expiry_cleanup_failed', code: String(expiryError.code || 'RPC_FAILED').slice(0, 40) }));
+  }
   const page = clampInt(req.query.page, 1, 1, 10_000);
   const limit = clampInt(req.query.limit, 24, 1, 48);
   const search = normalizeProductQuery(req.query.search);
