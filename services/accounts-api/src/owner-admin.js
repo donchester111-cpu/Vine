@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { resolveStaffAccess } from '@vine/shared/rbac';
-import { assertVineEmailConfigured, escapeVineHtml, getVineEmailProvider, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
+import { assertVineEmailConfigured, escapeVineHtml, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
 
 
 async function findAuthUserByEmail(accountsAdmin, email) {
@@ -49,19 +49,13 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
 
   app.get('/api/v1/owner/email-provider-status', ...owner, asyncRoute(async (_req, res) => {
     const configured = isVineEmailConfigured();
-    const provider = getVineEmailProvider();
-    const gmailSenderPresent = Boolean(String(process.env.GMAIL_SENDER_EMAIL || '').trim());
     res.json({ data: {
-      provider,
+      provider: configured ? 'resend' : null,
       configured,
-      senderAddressPresent: Boolean(String(process.env.VINE_EMAIL_FROM || process.env.GMAIL_SENDER_EMAIL || '').trim()),
+      senderAddressPresent: Boolean(String(process.env.VINE_EMAIL_FROM || '').trim()),
       message: configured
-        ? provider === 'google-gmail'
-          ? `Gmail email delivery is configured for ${String(process.env.GMAIL_SENDER_EMAIL).trim()}. Send a real test message to verify delivery.`
-          : 'Resend settings are present. Confirm the sender domain is verified and test a real delivery.'
-        : gmailSenderPresent
-          ? 'The Gmail sender address is set, but the OAuth client and refresh token must be connected in Render.'
-          : 'Email sending is not configured. Connect Google Gmail OAuth or configure a verified Resend sender on the Accounts and Operations services.'
+        ? 'Email provider settings are present. Resend must still accept the sender domain before delivery can be considered verified.'
+        : 'Email sending is not configured. Add RESEND_API_KEY and VINE_EMAIL_FROM to the Accounts and Operations services.'
     } });
   }));
 
@@ -184,7 +178,7 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
     if(error) throw new HttpError(503,'STAFF_LIST_FAILED','Staff list could not be loaded.');
     const rows=await Promise.all((data||[]).map(async row=>{const {data:u}=await accountsAdmin.auth.admin.getUserById(row.user_id);return {...row,email:u?.user?.email||'',fullName:u?.user?.user_metadata?.full_name||''};}));res.json({data:rows});
   }));
-  const settingKeys = new Set(['storefront','shipping','seo','policies']);
+  const settingKeys = new Set(['storefront','commerce','shipping','payments','notifications','security','seo','policies','marketing']);
   const assertSafeSettings = (value) => {
     const visit = (node, path = '') => {
       if (!node || typeof node !== 'object') return;
@@ -206,20 +200,87 @@ export function registerOwnerAdmin(app, { accountsAdmin, auth }) {
       .select('setting_key,setting_value,updated_at').order('setting_key');
     if (error) throw new HttpError(503, 'SETTINGS_UNAVAILABLE', 'Owner settings could not be loaded. Apply the Vineowner settings migration.');
     const settings = Object.fromEntries((data || []).map(row => [row.setting_key, row.setting_value]));
-    res.json({ data: { settings, updatedAt: Object.fromEntries((data || []).map(row => [row.setting_key, row.updated_at])) } });
+    // Integration status is derived from server-side environment, never trusted from a browser or persisted as owner input.
+    settings.integrations = {
+      paystackConfigured: Boolean(String(process.env.PAYSTACK_SECRET_KEY || '').trim()),
+      emailProviderConfigured: isVineEmailConfigured(),
+      smsProviderConfigured: Boolean(String(process.env.SMS_PROVIDER || '').trim())
+    };
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ data: { settings, updatedAt: Object.fromEntries((data || []).map(row => [row.setting_key, row.updated_at])), readOnlyGroups: ['integrations'] } });
   }));
 
   app.put('/api/v1/owner/settings/:key', ...owner, asyncRoute(async (req, res) => {
     const key = String(req.params.key || '');
+    if (key === 'integrations') throw new HttpError(403, 'SETTING_GROUP_READ_ONLY', 'Integration status is computed from service environment variables and cannot be edited here.');
     if (!settingKeys.has(key)) throw new HttpError(404, 'SETTING_GROUP_NOT_FOUND', 'That settings group is not supported.');
     const input = z.object({ value: z.record(z.string(), z.any()) }).strict().parse(req.body);
+    const allowedSettingFields = {
+      storefront: ['storeName','tagline','supportEmail','supportPhone','currency','timezone','maintenanceMode','announcementEnabled','announcementText'],
+      commerce: ['checkoutEnabled','minOrderNgn','maxItemsPerOrder','allowGuestCheckout','orderNumberPrefix'],
+      shipping: ['baseFeeNgn','freeShippingEnabled','freeShippingThresholdNgn','estimatedMinDays','estimatedMaxDays','coverageStates'],
+      payments: ['paystackEnabled','bankTransferEnabled','bankName','accountName','accountNumber','manualTransferReview','paymentHoldMinutes'],
+      notifications: ['orderEmailsEnabled','marketingEmailsEnabled','smsEnabled','provider','senderName'],
+      security: ['requireEmailConfirmation','staffInviteApproval','sessionMinutes','alertOnRoleChanges'],
+      seo: ['title','description','canonicalUrl','socialImageUrl'],
+      policies: ['returnsPolicy','privacyPolicy','termsOfService','shippingPolicy'],
+      marketing: ['promotionsEnabled','newsletterEnabled','loyaltyEnabled']
+    };
+    const unsupportedFields = Object.keys(input.value).filter(field => !allowedSettingFields[key].includes(field));
+    if (unsupportedFields.length) throw new HttpError(400, 'SETTING_FIELD_NOT_SUPPORTED', `Unsupported field(s) in ${key}: ${unsupportedFields.join(', ')}. Refresh the owner settings page and try again.`);
+    const booleanFields = {
+      storefront: ['maintenanceMode','announcementEnabled'], commerce: ['checkoutEnabled','allowGuestCheckout'],
+      shipping: ['freeShippingEnabled'], payments: ['paystackEnabled','bankTransferEnabled','manualTransferReview'],
+      notifications: ['orderEmailsEnabled','marketingEmailsEnabled','smsEnabled'],
+      security: ['requireEmailConfirmation','staffInviteApproval','alertOnRoleChanges'],
+      marketing: ['promotionsEnabled','newsletterEnabled','loyaltyEnabled']
+    };
+    for (const field of booleanFields[key] || []) if (input.value[field] !== undefined && typeof input.value[field] !== 'boolean') {
+      throw new HttpError(400, 'SETTING_FIELD_INVALID', `${field} must be true or false.`);
+    }
+    const numericRules = {
+      minOrderNgn: [0, 100000000, false], maxItemsPerOrder: [1, 50, true],
+      baseFeeNgn: [0, 100000000, false], freeShippingThresholdNgn: [0, 100000000, false],
+      estimatedMinDays: [0, 365, true], estimatedMaxDays: [0, 365, true],
+      paymentHoldMinutes: [5, 1440, true], sessionMinutes: [5, 120, true]
+    };
+    for (const [field, [min, max, integer]] of Object.entries(numericRules)) if (input.value[field] !== undefined) {
+      const value = input.value[field];
+      const nullable = ['baseFeeNgn','freeShippingThresholdNgn'].includes(field);
+      if (value === null && nullable) continue;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+        throw new HttpError(400, 'SETTING_FIELD_INVALID', `${field} must be ${integer ? 'a whole number' : 'a number'} between ${min} and ${max}.`);
+      }
+    }
+    if (key === 'payments' && input.value.accountNumber !== undefined && input.value.accountNumber !== '' && !/^\d{10}$/.test(String(input.value.accountNumber))) {
+      throw new HttpError(400, 'BANK_ACCOUNT_NUMBER_INVALID', 'The public receiving account number must contain exactly 10 digits.');
+    }
+    if (key === 'storefront' && input.value.supportEmail && !/^\S+@\S+\.\S+$/.test(String(input.value.supportEmail))) {
+      throw new HttpError(400, 'SUPPORT_EMAIL_INVALID', 'Enter a valid support email address or leave the field blank.');
+    }
+    for (const field of ['canonicalUrl','socialImageUrl']) if (key === 'seo' && input.value[field]) {
+      try { if (new URL(String(input.value[field])).protocol !== 'https:') throw new Error('protocol'); }
+      catch { throw new HttpError(400, 'SEO_URL_INVALID', `${field} must be a valid HTTPS URL or blank.`); }
+    }
+    if (key === 'shipping' && Number.isInteger(input.value.estimatedMinDays) && Number.isInteger(input.value.estimatedMaxDays) && input.value.estimatedMaxDays < input.value.estimatedMinDays) {
+      throw new HttpError(400, 'DELIVERY_WINDOW_INVALID', 'Estimated maximum delivery days must be at least the minimum days.');
+    }
     assertSafeSettings(input.value);
     const { data, error } = await accountsAdmin.from('vineowner_settings').upsert({
       setting_key: key, setting_value: input.value, updated_by: req.user.id, updated_at: new Date().toISOString()
     }, { onConflict: 'setting_key' }).select('setting_key,setting_value,updated_at').single();
-    if (error) throw new HttpError(503, 'SETTINGS_SAVE_FAILED', 'Settings could not be saved.');
-    await audit(req, 'settings.updated', 'settings', key, { settingKey: key, fieldCount: Object.keys(input.value).length });
-    res.json({ data: { key: data.setting_key, value: data.setting_value, updatedAt: data.updated_at } });
+    if (error) {
+      // Log only provider diagnostics—not the setting values, tokens, or bank-account payload.
+      console.error(JSON.stringify({ level: 'error', service: process.env.SERVICE_NAME, event: 'owner_settings_save_failed', settingKey: key, code: error.code || null, message: String(error.message || '').slice(0, 300), details: String(error.details || '').slice(0, 300), hint: String(error.hint || '').slice(0, 200) }));
+      throw new HttpError(503, 'SETTINGS_SAVE_FAILED', `Settings could not be saved (database code ${String(error.code || 'unknown').slice(0, 32)}). Check the Accounts API logs for the diagnostic detail.`);
+    }
+    let auditRecorded = true;
+    try { await audit(req, 'settings.updated', 'settings', key, { settingKey: key, fieldCount: Object.keys(input.value).length }); }
+    catch (auditError) {
+      auditRecorded = false;
+      console.error(JSON.stringify({ level: 'error', service: process.env.SERVICE_NAME, event: 'owner_settings_audit_failed', settingKey: key, code: auditError.code || 'AUDIT_WRITE_FAILED' }));
+    }
+    res.json({ data: { key: data.setting_key, value: data.setting_value, updatedAt: data.updated_at, auditRecorded } });
   }));
 
   app.get('/api/v1/owner/staff/:userId/permissions', ...owner, asyncRoute(async (req, res) => {
