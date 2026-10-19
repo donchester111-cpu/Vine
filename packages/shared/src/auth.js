@@ -71,8 +71,8 @@ export function requireAuth(authClient) {
         // server-side admin surfaces. They remain unusable for customer accounts, checkout,
         // reviews, and payment endpoints. Each admin route still applies the shared staff RBAC.
         const ownerAdminPrefixes = [
-          '/api/v1/admin/products', '/api/v1/admin/categories', '/api/v1/admin/suppliers',
-          '/api/v1/admin/supplier-products', '/api/v1/admin/orders', '/api/v1/admin/deliveries',
+          '/api/v1/admin/products', '/api/v1/admin/categories', '/api/v1/admin/suppliers', '/api/v1/admin/integration-status',
+          '/api/v1/admin/supplier-products', '/api/v1/admin/orders', '/api/v1/admin/payments', '/api/v1/admin/deliveries',
           '/api/v1/admin/analytics/', '/api/v1/admin/notifications', '/api/v1/admin/questions',
           '/api/v1/admin/product-images'
         ];

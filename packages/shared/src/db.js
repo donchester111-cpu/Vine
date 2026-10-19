@@ -23,16 +23,14 @@ export function createAuthContext(env = process.env) {
 }
 
 export function getAllowedOrigins(value = process.env.ALLOWED_ORIGINS) {
-  // Keep the known production storefront origins allowed even if Render's optional
-  // ALLOWED_ORIGINS value is blank or only contains local-development URLs. Additional
-  // deployment origins must still be listed explicitly in ALLOWED_ORIGINS.
-  const defaults = [
+  // The private owner console is hosted on this canonical origin. Keep it explicitly
+  // allow-listed even if a Render ALLOWED_ORIGINS value is incomplete; environment
+  // entries remain additive so staging and other approved frontends still work.
+  const requiredOrigins = [
     'https://vinestore.com.ng',
-    'https://www.vinestore.com.ng',
-    'https://vine-store-api.onrender.com',
-    'http://localhost:8080',
-    'http://127.0.0.1:5500'
+    'https://www.vinestore.com.ng'
   ];
-  const configured = String(value || '').split(',').map(s => s.trim()).filter(Boolean);
-  return [...new Set([...defaults, ...configured])];
+  const configuredOrigins = String(value || 'http://localhost:8080,http://127.0.0.1:5500')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  return [...new Set([...requiredOrigins, ...configuredOrigins])];
 }
