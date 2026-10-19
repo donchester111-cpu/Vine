@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { z } from 'zod';
 import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
@@ -18,7 +17,6 @@ const app = express();
 applySecurity(app, { requestLimit: 180 });
 app.use(express.json({ limit: '128kb' }));
 const auth = requireAuth(authClient);
-const storefrontHtmlPath = fileURLToPath(new URL('../../../Frontend/index.html', import.meta.url));
 // Define upload middleware before registering any route that references it.
 // Keeping these constants near app setup prevents a temporal-dead-zone crash at startup.
 const productImageBucket = String(process.env.VINE_PRODUCT_IMAGES_BUCKET || 'vine-product-images').trim();
@@ -44,15 +42,6 @@ function toPublicProduct(row) {
   };
 }
 
-app.get(['/','/index.html'], (_req, res, next) => {
-  // Serve the actual storefront from the Store API root as a fallback, so this
-  // Render URL opens the shopping page instead of a status JSON or blank not-found page.
-  // Keep a separate static-site deployment supported; both copies use the same APIs.
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Content-Security-Policy', "default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://accounts.google.com; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-src 'self' https:; font-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self' https:; upgrade-insecure-requests");
-  res.sendFile(storefrontHtmlPath, error => { if (error && !res.headersSent) next(error); });
-});
-
 app.get('/health', sendHealth);
 app.get('/ready', asyncRoute(async (_req, res) => {
   const [a, b] = await Promise.all([
@@ -62,6 +51,23 @@ app.get('/ready', asyncRoute(async (_req, res) => {
   if (a.error || b.error) throw new HttpError(503, 'DATABASE_UNAVAILABLE', 'One or more Vine store databases are not ready.');
   res.json({ status: 'ready', service: process.env.SERVICE_NAME });
 }));
+
+// Inventory expiry must not sit in front of a customer-facing catalogue read.
+// Trigger cleanup at most once per minute per instance; reservation creation also performs
+// authoritative cleanup inside the database transaction before checking stock.
+let lastInventoryCleanupAt = 0;
+let inventoryCleanupInFlight = null;
+function scheduleInventoryReservationCleanup() {
+  const now = Date.now();
+  if (inventoryCleanupInFlight || now - lastInventoryCleanupAt < 60_000) return;
+  lastInventoryCleanupAt = now;
+  inventoryCleanupInFlight = productsDb.rpc('expire_vine_inventory_reservations')
+    .then(({ error }) => {
+      if (error) console.warn(JSON.stringify({ level: 'warn', event: 'inventory_expiry_cleanup_failed', code: error.code || 'INVENTORY_CLEANUP_ERROR' }));
+    })
+    .catch(() => console.warn(JSON.stringify({ level: 'warn', event: 'inventory_expiry_cleanup_failed', code: 'INVENTORY_CLEANUP_ERROR' })))
+    .finally(() => { inventoryCleanupInFlight = null; });
+}
 
 const publicStoreSettings = {
   storefront: {
@@ -119,6 +125,7 @@ app.get('/api/v1/storefront/config', asyncRoute(async (_req, res) => {
 app.get('/api/v1/categories', asyncRoute(async (_req, res) => {
   const { data, error } = await productsDb.from('categories').select('id,name,slug,description,sort_order').eq('is_active', true).order('sort_order').order('name');
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
+  res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
   res.json({ data: data || [] });
 }));
 
@@ -133,13 +140,7 @@ app.get('/api/v1/admin/categories', auth, catalogView, asyncRoute(async (_req, r
 
 
 app.get('/api/v1/products', asyncRoute(async (req, res) => {
-  const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
-  // Expired-reservation cleanup must not make an otherwise readable storefront go blank.
-  // A cleanup error is logged without database details; inventory changes remain guarded
-  // by the checkout/reservation routines and the product list still applies stock safety.
-  if (expiryError) {
-    console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inventory_expiry_cleanup_failed', code: String(expiryError.code || 'RPC_FAILED').slice(0, 40) }));
-  }
+  scheduleInventoryReservationCleanup();
   const page = clampInt(req.query.page, 1, 1, 10_000);
   const limit = clampInt(req.query.limit, 24, 1, 48);
   const search = normalizeProductQuery(req.query.search);
@@ -160,6 +161,7 @@ app.get('/api/v1/products', asyncRoute(async (req, res) => {
   const from = (page - 1) * limit;
   const { data, error, count } = await query.range(from, from + limit - 1);
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
+  res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=120');
   res.json({ data: { products: (data || []).map(toPublicProduct), page, limit, total: count || 0 } });
 }));
 
@@ -564,12 +566,12 @@ app.get('/api/v1/me/questions', auth, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/v1/products/:slug', asyncRoute(async (req, res) => {
-  const { error: expiryError } = await productsDb.rpc('expire_vine_inventory_reservations');
-  if (expiryError) throw new HttpError(503, 'INVENTORY_UNAVAILABLE', 'Product availability could not be refreshed.');
+  scheduleInventoryReservationCleanup();
   const slug = safeText(180).parse(req.params.slug);
   const { data, error } = await productsDb.from('products').select(publicProductFields).eq('slug', slug).eq('status', 'published').maybeSingle();
   if (error) throw new HttpError(503, 'CATALOG_UNAVAILABLE', 'The product catalogue is temporarily unavailable.');
   if (!data) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'That product could not be found.');
+  res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
   res.json({ data: toPublicProduct(data) });
 }));
 
