@@ -32,6 +32,16 @@ services:
         sync: false
       - key: VINE_EMAIL_FROM
         sync: false
+      - key: GMAIL_SENDER_EMAIL
+        value: vinestore1official@gmail.com
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        value: https://vine-fnoh.onrender.com/api/v1/email/google/callback
       - key: ALLOWED_ORIGINS
         sync: false
 
@@ -64,6 +74,8 @@ services:
         sync: false
       - key: VINE_PRODUCT_IMAGES_BUCKET
         value: vine-product-images
+      - key: VINE_STOREFRONT_URL
+        value: https://vinestore.com.ng
       - key: ORDERS_SUPABASE_URL
         value: https://ybwdecxsbveiobfvwkvr.supabase.co
       - key: ORDERS_SUPABASE_SERVICE_ROLE_KEY
@@ -101,6 +113,14 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: VINE_EMAIL_FROM
+        sync: false
+      - key: GMAIL_SENDER_EMAIL
+        value: vinestore1official@gmail.com
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REFRESH_TOKEN
         sync: false
       - key: PRODUCTS_SUPABASE_URL
         value: https://xiehbdaaioifjcbnvpqf.supabase.co

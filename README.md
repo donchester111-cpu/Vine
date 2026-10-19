@@ -40,16 +40,16 @@ Cross-project identity links intentionally use IDs verified by the owning API in
 
 The code now includes the Store API image upload route with the middleware initialized before its routes, public product detail/reviews/gallery and Q&A routes, staff catalogue routes for draft/published/archived products, database-backed delivery history, verified-purchase enforcement, and an email queue worker. The owner account has an active membership in the configurable staff-role model; the invited staff account was confirmed active during the audit.
 
-The live Render logs exposed a Store API start-up failure caused by `productImageBody` being referenced before initialization. The source in this archive fixes the initialization order. This does **not** change the currently deployed Render services because this task did not deploy anything.
+The live Render logs exposed earlier Store API deployment/start-up errors. This source archive keeps the image-upload middleware initialized before route registration. The Store API root now serves `Frontend/index.html` instead of returning an unhelpful not-found response, and catalogue reads are not blocked by a cleanup-only RPC failure. These code changes are only in this download until you deploy them; I have not written to GitHub or deployed the source from this session.
 
 ### One external credential is still required for real staff email
 
 Passwordless staff sign-in and staff invitations generate secure Supabase magic/invite links server-side, then send them through Resend. The previous live failure was Supabase's built-in sender returning `429 email rate limit exceeded`. The source now returns a specific error when transactional mail is not configured, instead of hiding this as a generic sign-in failure.
 
-Before email can actually be sent, the existing Render Accounts and Operations services need these private environment variables:
+Before email can actually be sent, the existing Render Accounts and Operations services need private environment variables:
 
-- `RESEND_API_KEY` — a real Resend API key.
-- `VINE_EMAIL_FROM` — a sender address/display name on a verified domain, e.g. `Vine <no-reply@your-verified-domain>`.
+- Optional Resend route: `RESEND_API_KEY` and `VINE_EMAIL_FROM` on a verified domain.
+- Free Gmail API route: `GMAIL_SENDER_EMAIL`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `GOOGLE_OAUTH_REFRESH_TOKEN` on the Accounts and Operations services. The Accounts service also needs `GOOGLE_OAUTH_REDIRECT_URI=https://vine-fnoh.onrender.com/api/v1/email/google/callback`. Complete the connection only after this source has been deployed. Keep every secret only in Render, never in browser files or GitHub. Google refresh tokens from an external app left in Testing can expire, so this is not represented as a permanent production email setup.
 
 No key or verified sender credential was available to this session, so none has been invented. A ZIP cannot make third-party email deliver without these provider credentials. After entering them in Render, use the private service logs and a real invited staff account to verify delivery. Supabase Auth's Site URL and redirect allowlist must include the actual `https://vinestore.com.ng/vineger.html` URL.
 
@@ -63,18 +63,18 @@ Generate a shared random value locally or in a private secret manager; do not pu
 
 Use the actual live values in the private Render service environment; do not replace a working service key with a placeholder. The `render.yaml` and `.env.example` files document the variable names and project URLs but contain no secret values.
 
-- Accounts service: `AUTH_SUPABASE_URL`, `AUTH_SUPABASE_ANON_KEY`, `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY`, `VINE_OWNER_EMAIL`, `VINE_OWNER_USER_ID`, `OWNER_SESSION_SECRET`, `OWNER_PASSWORD`, `VINE_STAFF_INVITE_REDIRECT_URL`, `RESEND_API_KEY`, `VINE_EMAIL_FROM`, `ALLOWED_ORIGINS`.
+- Accounts service: `AUTH_SUPABASE_URL`, `AUTH_SUPABASE_ANON_KEY`, `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY`, `VINE_OWNER_EMAIL`, `VINE_OWNER_USER_ID`, `OWNER_SESSION_SECRET`, `OWNER_PASSWORD`, `VINE_STAFF_INVITE_REDIRECT_URL`, either Resend variables or Google Gmail OAuth variables, `GOOGLE_OAUTH_REDIRECT_URI`, `GMAIL_SENDER_EMAIL`, `ALLOWED_ORIGINS`.
 - Store service: Accounts variables plus `PRODUCTS_SUPABASE_URL`, `PRODUCTS_SUPABASE_SERVICE_ROLE_KEY`, `ORDERS_SUPABASE_URL`, `ORDERS_SUPABASE_SERVICE_ROLE_KEY`, `VINE_PRODUCT_IMAGES_BUCKET=vine-product-images`, `OWNER_SESSION_SECRET`, `VINE_OWNER_USER_ID`, `ALLOWED_ORIGINS`, `CHECKOUT_ENABLED` and `DELIVERY_FEE_KOBO`.
-- Operations service: Accounts variables plus product, order and operations database URLs/service keys, owner-session agreement, `RESEND_API_KEY`, `VINE_EMAIL_FROM`, `ALLOWED_ORIGINS` and existing payment-provider configuration variables.
+- Operations service: Accounts variables plus product, order and operations database URLs/service keys, owner-session agreement, either Resend variables or Google Gmail OAuth variables, `GMAIL_SENDER_EMAIL`, `ALLOWED_ORIGINS` and existing payment-provider configuration variables.
 
 Set `ALLOWED_ORIGINS` to the exact deployed storefront origin(s), comma-separated, with scheme and hostname and no trailing slash. This is an existing browser CORS control, not a secret.
 
 ## Deployment checklist
 
 1. Inspect the target service's current environment before merging values. Preserve its live Supabase service keys; do not replace them with `.env.example` blanks.
-2. Deploy the source in this archive to the matching Render service paths/configuration. The source archive does not push or commit to GitHub and has not automatically triggered a deployment.
+2. Deploy the source in this archive to the matching Render service paths/configuration. This archive-generation process does not write to GitHub or automatically trigger a deployment.
 3. Configure the same owner-session values on all three APIs and configure a verified transactional sender in Resend. This is necessary for owner cross-service access and staff sign-in email delivery.
-4. Verify each `/health` and `/ready` endpoint. From `vineowner.html`, run the authenticated service checks; a public health response alone does not prove protected API access.
+4. Verify the customer storefront at `https://vine-store-api.onrender.com/`, then verify each `/health` and `/ready` endpoint. From `vineowner.html`, run the authenticated service checks; a public health response alone does not prove protected API access.
 5. Test invited-staff sign-in with a real email, then create/edit/archive a product, upload the main and gallery images, publish a customer question answer, create/update a delivery on a paid order, and inspect the audit/notification records.
 6. Keep `CHECKOUT_ENABLED=false` until product sourcing, available stock, delivery coverage/fees, payment instructions/provider configuration, webhook and reconciliation checks are intentionally reviewed. Payment settings were not changed in this work.
 

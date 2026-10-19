@@ -17,6 +17,14 @@ The connected Supabase projects were inspected directly. Product image storage, 
 
 ## Validation
 
-- `npm test`: 33 passing tests.
+- `npm test`: 37 passing tests.
 - `npm run check`: all backend syntax checks pass.
 - Inline JavaScript syntax and duplicate HTML ID checks pass for all three active pages.
+
+
+## 2026-10-19 storefront/email fix package
+
+- The Store API root (`/`) and `/index.html` serve the actual `Frontend/index.html` page, including a CSP suitable for its inline application script and HTTPS APIs. The canonical static-site deployment remains supported.
+- The public product list no longer fails entirely if the inventory-expiry cleanup RPC temporarily returns an error; it logs a sanitized warning and keeps catalog reads available. Inventory reservation operations remain server-side.
+- CORS defaults allow the configured production storefront domain and the Store API root origin; unknown origins still require explicit `ALLOWED_ORIGINS`.
+- Gmail OAuth routes are included but remain unconfigured until owner-created Google OAuth credentials are stored privately in Render and an actual delivery is tested. The package does not include credentials or alter payment settings.
