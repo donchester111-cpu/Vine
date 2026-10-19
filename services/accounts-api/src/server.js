@@ -9,7 +9,6 @@ import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { assertVineEmailConfigured, escapeVineHtml, sendVineEmail } from '@vine/shared/email';
 import { emailSchema, optionalText, phoneSchema, safeText, uuidSchema } from '@vine/shared/validation';
 import { registerOwnerAdmin } from './owner-admin.js';
-import { registerGoogleMailOAuthRoutes } from './google-mail-oauth.js';
 
 process.env.SERVICE_NAME = 'vine-accounts-api';
 const { authClient, accountsAdmin } = createAuthContext();
@@ -17,7 +16,7 @@ if (!accountsAdmin) throw new Error('ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY is requi
 const app = express();
 app.set('trust proxy', 1);
 applySecurity(app, { requestLimit: 120 });
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '1mb' }));
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false });
 const auth = requireAuth(authClient);
 
@@ -189,8 +188,26 @@ app.post('/api/v1/auth/logout', auth, asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
+const profilePhotoBucket = 'vine-profile-photos';
+const profilePhotoLimitBytes = 512 * 1024;
+const profilePhotoTypes = new Map([
+  ['image/jpeg', { extension: 'jpg', matches: buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff }],
+  ['image/png', { extension: 'png', matches: buffer => buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])) }],
+  ['image/webp', { extension: 'webp', matches: buffer => buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP' }]
+]);
+function profilePhotoObjectPath(url, userId) {
+  try {
+    const parsed = new URL(String(url || ''));
+    const marker = `/storage/v1/object/public/${profilePhotoBucket}/`;
+    const index = parsed.pathname.indexOf(marker);
+    if (index < 0) return null;
+    const path = decodeURIComponent(parsed.pathname.slice(index + marker.length));
+    return path.startsWith(`${userId}/`) ? path : null;
+  } catch { return null; }
+}
+
 app.get('/api/v1/me', auth, asyncRoute(async (req, res) => {
-  const { data, error } = await accountsAdmin.from('profiles').select('user_id,full_name,phone,created_at,updated_at').eq('user_id', req.user.id).maybeSingle();
+  const { data, error } = await accountsAdmin.from('profiles').select('user_id,full_name,phone,avatar_url,created_at,updated_at').eq('user_id', req.user.id).maybeSingle();
   if (error) throw new HttpError(503, 'PROFILE_UNAVAILABLE', 'Your profile could not be loaded.');
   if (!data) throw new HttpError(404, 'PROFILE_NOT_FOUND', 'Your profile is not ready yet. Please try again shortly.');
   res.json({ data: { ...data, email: req.user.email } });
@@ -201,9 +218,43 @@ app.patch('/api/v1/me/profile', auth, asyncRoute(async (req, res) => {
   const patch = { user_id: req.user.id, updated_at: new Date().toISOString() };
   if (input.fullName !== undefined) patch.full_name = input.fullName;
   if (input.phone !== undefined) patch.phone = input.phone || null;
-  const { data, error } = await accountsAdmin.from('profiles').upsert(patch, { onConflict: 'user_id' }).select('user_id,full_name,phone,created_at,updated_at').single();
+  const { data, error } = await accountsAdmin.from('profiles').upsert(patch, { onConflict: 'user_id' }).select('user_id,full_name,phone,avatar_url,created_at,updated_at').single();
   if (error) throw new HttpError(400, 'PROFILE_UPDATE_FAILED', 'We could not update your profile.');
   res.json({ data });
+}));
+
+app.post('/api/v1/me/profile-avatar', auth, asyncRoute(async (req, res) => {
+  const input = z.object({ mimeType: z.enum(['image/jpeg','image/png','image/webp']), dataBase64: z.string().min(1).max(700000) }).parse(req.body);
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(input.dataBase64) || input.dataBase64.length % 4 === 1) {
+    throw new HttpError(400, 'INVALID_PROFILE_PHOTO', 'Choose a valid JPG, PNG or WebP image.');
+  }
+  const bytes = Buffer.from(input.dataBase64, 'base64');
+  if (!bytes.length || bytes.length > profilePhotoLimitBytes || !profilePhotoTypes.get(input.mimeType).matches(bytes)) {
+    throw new HttpError(400, 'INVALID_PROFILE_PHOTO', 'The photo must be a valid JPG, PNG or WebP image no larger than 512 KB after compression.');
+  }
+  const { data: oldProfile, error: oldProfileError } = await accountsAdmin.from('profiles').select('avatar_url').eq('user_id', req.user.id).maybeSingle();
+  if (oldProfileError) throw new HttpError(503, 'PROFILE_UNAVAILABLE', 'Your profile could not be loaded before saving the photo.');
+  const kind = profilePhotoTypes.get(input.mimeType);
+  const objectPath = `${req.user.id}/${crypto.randomUUID()}.${kind.extension}`;
+  const { error: uploadError } = await accountsAdmin.storage.from(profilePhotoBucket).upload(objectPath, bytes, {
+    contentType: input.mimeType, cacheControl: '0', upsert: false
+  });
+  if (uploadError) {
+    console.error(JSON.stringify({ level: 'error', event: 'profile_photo_upload_failed', code: uploadError.code || 'STORAGE_ERROR' }));
+    throw new HttpError(503, 'PROFILE_PHOTO_UPLOAD_FAILED', 'Vine could not save your profile picture. Please try again shortly.');
+  }
+  const avatarUrl = accountsAdmin.storage.from(profilePhotoBucket).getPublicUrl(objectPath).data.publicUrl;
+  const { data, error: profileUpdateError } = await accountsAdmin.from('profiles').update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() }).eq('user_id', req.user.id).select('user_id,full_name,phone,avatar_url,created_at,updated_at').maybeSingle();
+  if (profileUpdateError || !data) {
+    await accountsAdmin.storage.from(profilePhotoBucket).remove([objectPath]).catch(() => {});
+    throw new HttpError(503, 'PROFILE_PHOTO_SAVE_FAILED', 'The photo uploaded but Vine could not save it to your profile. Please try again.');
+  }
+  const previousPath = profilePhotoObjectPath(oldProfile?.avatar_url, req.user.id);
+  if (previousPath && previousPath !== objectPath) {
+    const { error: removeError } = await accountsAdmin.storage.from(profilePhotoBucket).remove([previousPath]);
+    if (removeError) console.warn(JSON.stringify({ level: 'warn', event: 'old_profile_photo_cleanup_failed', code: removeError.code || 'STORAGE_ERROR' }));
+  }
+  res.status(201).json({ data: { ...data, email: req.user.email } });
 }));
 
 const addressSchema = z.object({
@@ -266,7 +317,6 @@ app.delete('/api/v1/me/addresses/:id', auth, asyncRoute(async (req, res) => {
 }));
 
 registerOwnerAdmin(app, { accountsAdmin, auth });
-registerGoogleMailOAuthRoutes(app);
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);
