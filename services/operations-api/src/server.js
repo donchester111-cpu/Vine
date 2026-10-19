@@ -440,7 +440,9 @@ app.get('/api/v1/admin/notifications', auth, notificationsView, asyncRoute(async
   const limit = clampInt(req.query.limit, 50, 1, 100);
   const { data, error } = await operationsDb.from('notification_jobs').select('id,order_id,channel,template_key,status,attempts,available_at,last_error_code,created_at,updated_at').order('created_at', { ascending: false }).limit(limit);
   if (error) throw new HttpError(503, 'NOTIFICATIONS_UNAVAILABLE', 'Notification jobs could not be loaded.');
-  res.json({ data: data || [], delivery: { provider: isVineEmailConfigured() ? 'resend' : null, configured: isVineEmailConfigured(), workerEnabled: isVineEmailConfigured(), message: isVineEmailConfigured() ? 'Transactional email delivery is enabled. Sent and failed messages are recorded here.' : 'Transactional email delivery is disabled until RESEND_API_KEY and VINE_EMAIL_FROM are configured on this Operations service.' } });
+  const emailConfigured = isVineEmailConfigured();
+  const emailProvider = getVineEmailProvider();
+  res.json({ data: data || [], delivery: { provider: emailProvider, configured: emailConfigured, workerEnabled: emailConfigured, message: emailConfigured ? `Transactional email delivery is enabled through ${emailProvider}. Sent and failed messages are recorded here.` : 'Transactional email delivery is disabled until Google Gmail OAuth or a verified Resend sender is configured on this Operations service.' } });
 }));
 
 app.post('/api/v1/admin/notifications/:id/requeue', auth, notificationsManage, asyncRoute(async (req, res) => {
