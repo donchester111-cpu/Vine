@@ -12,7 +12,6 @@
   "containers": [
     {
       "class_name": "StoreContainer",
-      "max_instances": 1,
       "scheduling_policy": "durable_object",
       "images": {
         "store": {
@@ -45,7 +44,7 @@
     "VINE_PRODUCT_IMAGES_BUCKET": "vine-product-images",
     "VINE_STOREFRONT_URL": "https://vinestore.com.ng",
     "ORDERS_SUPABASE_URL": "https://ybwdecxsbveiobfvwkvr.supabase.co",
-    "CHECKOUT_ENABLED": "false",
+    "CHECKOUT_ENABLED": "true",
     "DELIVERY_FEE_KOBO": "0"
   }
 }
