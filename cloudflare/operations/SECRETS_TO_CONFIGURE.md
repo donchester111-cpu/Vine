@@ -21,4 +21,4 @@ Set these as **Worker secrets** in the Cloudflare dashboard. Never commit their 
 - `BANK_TRANSFER_ACCOUNT_NAME`
 - `BANK_TRANSFER_ACCOUNT_NUMBER`
 
-Also copy the current value of `ALLOWED_ORIGINS` from the existing Render service. Do not replace it with an invented value. Keep `CHECKOUT_ENABLED=false` on Store API until the purchase flow is fully tested.
+Also copy the current value of `ALLOWED_ORIGINS` from the existing Render service. Do not replace it with an invented value. The Store API configuration now sets `CHECKOUT_ENABLED=true`. The existing Supabase owner settings (`commerce.checkoutEnabled`) and payment-method settings remain additional runtime gates; confirm them and verify payment-provider secrets/webhooks before taking real orders.
