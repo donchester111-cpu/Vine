@@ -7,7 +7,7 @@
 - Four separate Supabase projects are used; they remain external and unchanged.
 - Operations API starts its notification queue polling every 30 seconds when email delivery is configured and runs delivery reconciliation after startup. Queue records are persisted in Supabase.
 - Frontend HTML and OAuth callback settings contain Render URLs that require a deliberate post-deploy cutover.
-- Checkout is disabled in the source configuration and must remain disabled during the migration.
+- The Cloudflare Store API staging configuration sets `CHECKOUT_ENABLED=true` at the user's request. The application still enforces its existing Supabase owner-setting and per-payment-method gates; those must be checked independently before real transactions.
 
 ## Baseline validation
 
