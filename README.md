@@ -13,7 +13,7 @@ This archive is the complete source for a **controlled deployment** of the curre
 - `services/store-api` — product/category/review/Q&A/image APIs, catalogue permissions, inventory checks and checkout creation.
 - `services/operations-api` — delivery records/history, verified payment webhooks, payment status, audits, sales analytics and the transactional-notification worker.
 - `packages/shared` — security, RBAC, validation, CORS and shared transactional email.
-- `supabase/migrations` — SQL history for all four isolated databases; the migrations include the database changes applied during the integration audit.
+- `supabase/migrations` — versioned SQL included for the order-tracking staff-assignment schema change; historical migration state remains recorded in each live Supabase project.
 
 ## Existing production service addresses
 
@@ -38,7 +38,7 @@ Cross-project identity links intentionally use IDs verified by the owning API in
 
 ## Integration state
 
-The code now includes the Store API image upload route with the middleware initialized before its routes, public product detail/reviews/gallery and Q&A routes, staff catalogue routes for draft/published/archived products, database-backed delivery history, verified-purchase enforcement, and an email queue worker. The owner account has an active membership in the configurable staff-role model; the invited staff account was confirmed active during the audit.
+The code now includes the Store API image upload route with the middleware initialized before its routes, public product detail/reviews/gallery and Q&A routes, staff catalogue routes for draft/published/archived products, database-backed delivery history, verified-purchase enforcement, and an email queue worker. This update adds a Vine-branded customer tracking panel inside each account order, an automatically refreshed milestone/history view, and Vineger controls for carrier, tracking reference, estimated arrival, courier contact and staff-only notes. After a payment is confirmed by the existing verified payment flow, the Operations API assigns the order to a randomly selected active non-owner staff member, creates a delivery timeline record, and reconciles recent paid-but-unassigned orders after an API restart. Staff who do not have global delivery-management permission can only see and update deliveries assigned to their own account. The owner account has an active membership in the configurable staff-role model; the invited staff account was confirmed active during the audit.
 
 The live Render logs exposed earlier Store API deployment/start-up errors. This source archive keeps the image-upload middleware initialized before route registration. The Store API root now serves `Frontend/index.html` instead of returning an unhelpful not-found response, and catalogue reads are not blocked by a cleanup-only RPC failure. These code changes are only in this download until you deploy them; I have not written to GitHub or deployed the source from this session.
 
@@ -87,7 +87,7 @@ npm test
 npm run check
 ```
 
-Static inline JavaScript in the HTML pages should also be parsed before deployment. The integration audit includes contract tests for route alignment, staff permissions, passwordless email, upload-middleware initialization and delivery persistence.
+Static inline JavaScript in the HTML pages should also be parsed before deployment. The order-tracking integration includes contract tests for migration shape, paid-only assignment, random active-staff selection, customer-order scoping, assigned-staff authorisation, timeline persistence, auto-refresh, and the Vineger update controls.
 
 ## Important limitation
 
