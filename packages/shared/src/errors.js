@@ -30,5 +30,7 @@ export function errorHandler(error, req, res, _next) {
   }
   // Do not expose SQL, provider responses, access tokens, or environment values.
   console.error(JSON.stringify({ level: 'error', service: process.env.SERVICE_NAME || 'vine-api', requestId: req.id, message: error?.message || 'Unknown error' }));
-  return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong. Please try again.' } });
+  const reference = String(req.id || '').trim();
+  const suffix = reference ? ` If it keeps happening, share reference ${reference} with Vine support.` : ' If it keeps happening, contact Vine support.';
+  return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: `We couldn’t complete that action just now. Please try again.${suffix}`, requestId: reference || undefined } });
 }
