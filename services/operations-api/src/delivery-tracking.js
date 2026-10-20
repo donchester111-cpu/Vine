@@ -9,23 +9,18 @@ const CUSTOMER_VISIBLE_DELIVERY_STATUSES = new Set([
 const TERMINAL_DELIVERY_STATUSES = new Set(['delivered', 'failed', 'returned', 'cancelled']);
 
 function safeTimelineEvent(row) {
-  // Internal staff notes and actor identifiers must never be returned to customers.
+  // Customer-visible history contains only validated status and time; internal notes and actor IDs never leave the API.
   if (!CUSTOMER_VISIBLE_DELIVERY_STATUSES.has(String(row.status || ''))) return null;
   return { status: row.status, at: row.created_at };
 }
 
-/**
- * Status-based customer order tracking for Vine.
- * No courier GPS, map, coordinates, or location permission is used by this module.
- * The order-owner check is performed in the database query before any delivery data
- * or courier contact information is returned.
- */
-export function registerDeliveryTrackingRoutes({ app, auth, ordersDb, operationsDb }) {
+/** Customer order tracking with order-owner verification and no GPS/location permission requirement. */
+export function registerDeliveryTrackingRoutes({ app, auth, ordersDb, operationsDb, productsDb }) {
   app.get('/api/v1/me/orders/:id/tracking', auth, asyncRoute(async (req, res) => {
     const orderId = uuidSchema.parse(req.params.id);
     const { data: order, error: orderError } = await ordersDb
       .from('orders')
-      .select('id,order_number,customer_id,status,payment_status,created_at,paid_at,shipping_address')
+      .select('id,order_number,customer_id,status,payment_status,currency,subtotal_kobo,delivery_fee_kobo,total_kobo,created_at,paid_at,shipping_address')
       .eq('id', orderId)
       .eq('customer_id', req.user.id)
       .maybeSingle();
@@ -52,11 +47,25 @@ export function registerDeliveryTrackingRoutes({ app, auth, ordersDb, operations
       timeline = (rows || []).map(safeTimelineEvent).filter(Boolean);
     }
 
+    const { data: itemRows, error: itemsError } = await ordersDb
+      .from('order_items')
+      .select('product_id,name_snapshot,quantity,unit_price_kobo,line_total_kobo')
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: true })
+      .limit(100);
+    if (itemsError) throw new HttpError(503, 'ORDER_ITEMS_UNAVAILABLE', 'The items in this order could not be loaded.');
+
+    const productIds = [...new Set((itemRows || []).map(row => row.product_id).filter(Boolean))];
+    let imageByProductId = new Map();
+    if (productsDb && productIds.length) {
+      const { data: productRows, error: imageError } = await productsDb.from('products')
+        .select('id,image_url').in('id', productIds);
+      if (!imageError) imageByProductId = new Map((productRows || []).map(row => [row.id, row.image_url]));
+    }
+
     const orderStatus = String(order.status || '').toLowerCase();
     const deliveryStatus = String(delivery?.status || '').toLowerCase();
     const status = deliveryStatus || orderStatus || 'pending_payment';
-    // Once a delivery record exists, its saved fulfilment status is authoritative;
-    // order status remains a fallback for older orders without a delivery record.
     const delivered = delivery ? deliveryStatus === 'delivered' : orderStatus === 'delivered';
     const terminal = TERMINAL_DELIVERY_STATUSES.has(deliveryStatus) || ['delivered', 'cancelled', 'refunded'].includes(orderStatus);
     const dispatched = delivery ? ['dispatched', 'in_transit'].includes(deliveryStatus) : ['shipped', 'delivered'].includes(orderStatus);
@@ -64,9 +73,7 @@ export function registerDeliveryTrackingRoutes({ app, auth, ordersDb, operations
     const failed = ['failed', 'returned', 'cancelled'].includes(deliveryStatus) || ['cancelled', 'refunded'].includes(orderStatus);
     const paymentConfirmed = String(order.payment_status || '').toLowerCase() === 'paid';
     const allowCourierContact = paymentConfirmed && Boolean(delivery?.courier_phone) && dispatched && !terminal;
-    const destinationAddress = order.shipping_address && typeof order.shipping_address === 'object'
-      ? { city: order.shipping_address.city || null, state: order.shipping_address.state || null }
-      : { city: null, state: null };
+    const address = order.shipping_address && typeof order.shipping_address === 'object' ? order.shipping_address : {};
 
     res.setHeader('Cache-Control', 'no-store');
     res.json({ data: {
@@ -75,9 +82,30 @@ export function registerDeliveryTrackingRoutes({ app, auth, ordersDb, operations
         orderNumber: order.order_number,
         status: order.status,
         paymentStatus: order.payment_status,
+        currency: order.currency,
+        subtotalKobo: Number(order.subtotal_kobo || 0),
+        deliveryFeeKobo: Number(order.delivery_fee_kobo || 0),
+        totalKobo: Number(order.total_kobo || 0),
         createdAt: order.created_at,
         paidAt: order.paid_at,
-        destination: destinationAddress
+        destination: {
+          recipientName: address.recipientName || null,
+          phone: address.phone || null,
+          addressLine1: address.addressLine1 || null,
+          addressLine2: address.addressLine2 || null,
+          city: address.city || null,
+          state: address.state || null,
+          postalCode: address.postalCode || null,
+          landmark: address.landmark || null
+        },
+        items: (itemRows || []).map(row => ({
+          productId: row.product_id,
+          name: row.name_snapshot,
+          quantity: Number(row.quantity),
+          unitPriceKobo: Number(row.unit_price_kobo),
+          lineTotalKobo: Number(row.line_total_kobo),
+          imageUrl: imageByProductId.get(row.product_id) || null
+        }))
       },
       delivery: delivery ? {
         id: delivery.id,
@@ -100,12 +128,7 @@ export function registerDeliveryTrackingRoutes({ app, auth, ordersDb, operations
   }));
 }
 
-
-/**
- * Allows authorised fulfilment staff to revise carrier, tracking, courier, and ETA
- * details after a delivery record exists. Detail edits are audited separately and
- * deliberately do not create fake delivery-status timeline events.
- */
+/** Update carrier/contact/ETA details. Authorization is handled by the assigned-delivery middleware. */
 export function registerAdminDeliveryDetailsRoute({ app, auth, deliveryAdmin, operationsDb, addAudit }) {
   app.patch('/api/v1/admin/deliveries/:id/details', auth, deliveryAdmin, asyncRoute(async (req, res) => {
     const id = uuidSchema.parse(req.params.id);
@@ -125,6 +148,7 @@ export function registerAdminDeliveryDetailsRoute({ app, auth, deliveryAdmin, op
       trackingCode: readText('trackingCode', 120),
       courierName: readText('courierName', 120),
       courierPhone: readText('courierPhone', 30),
+      internalNotes: readText('internalNotes', 2000),
       estimatedDeliveryAt: body.estimatedDeliveryAt
     };
 
@@ -138,7 +162,7 @@ export function registerAdminDeliveryDetailsRoute({ app, auth, deliveryAdmin, op
     if (input.courierPhone && !/^[+0-9() .-]{7,30}$/.test(input.courierPhone)) {
       throw new HttpError(400, 'COURIER_PHONE_INVALID', 'Enter a valid courier contact number.');
     }
-    if ([input.provider, input.trackingCode, input.courierName, input.courierPhone, input.estimatedDeliveryAt].every(value => value === undefined)) {
+    if ([input.provider, input.trackingCode, input.courierName, input.courierPhone, input.internalNotes, input.estimatedDeliveryAt].every(value => value === undefined)) {
       throw new HttpError(400, 'DELIVERY_DETAILS_EMPTY', 'Provide at least one delivery detail to update.');
     }
 
@@ -162,6 +186,7 @@ export function registerAdminDeliveryDetailsRoute({ app, auth, deliveryAdmin, op
     if (input.trackingCode !== undefined) patch.tracking_code = input.trackingCode || null;
     if (input.courierName !== undefined) patch.courier_name = input.courierName || null;
     if (input.courierPhone !== undefined) patch.courier_phone = input.courierPhone || null;
+    if (input.internalNotes !== undefined) patch.internal_notes = input.internalNotes || null;
     if (input.estimatedDeliveryAt !== undefined) patch.estimated_delivery_at = input.estimatedDeliveryAt || null;
 
     const { data: delivery, error } = await operationsDb.from('deliveries')

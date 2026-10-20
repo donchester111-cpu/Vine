@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
 import { createAuthContext, createSupabaseClient } from '@vine/shared/db';
 import { requireAuth } from '@vine/shared/auth';
-import { requirePermission } from '@vine/shared/rbac';
+import { requirePermission, resolveStaffAccess } from '@vine/shared/rbac';
+import { registerAdminDeliveryDetailsRoute, registerDeliveryTrackingRoutes } from './delivery-tracking.js';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
 import { escapeVineHtml, isVineEmailConfigured, sendVineEmail } from '@vine/shared/email';
 import { clampInt, optionalText, safeText, uuidSchema } from '@vine/shared/validation';
@@ -25,6 +26,33 @@ const analyticsAdmin = requirePermission(accountsAdmin, 'analytics.view', ['owne
 const notificationsView = requirePermission(accountsAdmin, 'notifications.view', ['owner', 'admin', 'operations', 'support']);
 const notificationsManage = requirePermission(accountsAdmin, 'notifications.manage', ['owner', 'admin', 'operations']);
 const integrationsView = requirePermission(accountsAdmin, 'integrations.view', ['owner', 'admin', 'operations']);
+
+// Assigned delivery workers may view and update only the deliveries that belong to them.
+// Staff with the regular delivery permissions and the owner retain their existing wider scope.
+async function assignedDeliveryView(req, _res, next) {
+  try {
+    const access = await resolveStaffAccess(accountsAdmin, req.user);
+    req.staffAccess = access;
+    req.deliveryAssignedOnly = !access.permissions.some(key => key === '*' || key === 'deliveries.view' || key === 'deliveries.manage');
+    next();
+  } catch (error) { next(error); }
+}
+
+async function assignedDeliveryManage(req, _res, next) {
+  try {
+    const access = await resolveStaffAccess(accountsAdmin, req.user);
+    req.staffAccess = access;
+    if (access.permissions.includes('*') || access.permissions.includes('deliveries.manage')) return next();
+    const id = uuidSchema.parse(req.params.id);
+    const { data: delivery, error } = await operationsDb.from('deliveries')
+      .select('id,assigned_staff_id').eq('id', id).maybeSingle();
+    if (error) throw new HttpError(503, 'DELIVERY_AUTH_CHECK_FAILED', 'The delivery assignment could not be checked.');
+    if (!delivery) throw new HttpError(404, 'DELIVERY_NOT_FOUND', 'That delivery record was not found.');
+    if (delivery.assigned_staff_id !== req.user.id) throw new HttpError(403, 'DELIVERY_ASSIGNMENT_REQUIRED', 'Only the assigned Vine staff member or an authorised delivery manager can update this delivery.');
+    req.deliveryAssignedOnly = true;
+    next();
+  } catch (error) { next(error); }
+}
 
 function safeProviderMessage(message) {
   return String(message || '').slice(0, 500).replace(/(sk_[a-zA-Z0-9]+|Bearer\s+\S+)/g, '[redacted]');
@@ -193,6 +221,115 @@ async function loadOrderForPayment(orderId) {
   return data;
 }
 
+async function chooseRandomActiveFulfilmentStaff() {
+  const { data: memberships, error: membershipError } = await accountsAdmin.from('staff_memberships')
+    .select('user_id,role_id,status,staff_roles(name,is_owner_role)')
+    .eq('status', 'active');
+  if (membershipError) throw new HttpError(503, 'FULFILMENT_STAFF_UNAVAILABLE', 'Vine could not load the active staff roster. Order assignment will be retried.');
+  const candidates = (memberships || []).filter(member => {
+    const role = Array.isArray(member.staff_roles) ? member.staff_roles[0] : member.staff_roles;
+    return member.user_id && !role?.is_owner_role && String(role?.name || '').trim().toLowerCase() !== 'owner';
+  });
+  if (!candidates.length) throw new HttpError(503, 'FULFILMENT_STAFF_UNAVAILABLE', 'No active non-owner Vine staff are available to receive this order. Activate a staff membership and retry assignment.');
+  return candidates[crypto.randomInt(0, candidates.length)];
+}
+
+async function ensurePaidOrderDeliveryAssignment(order) {
+  if (!order?.id || String(order.payment_status || '').toLowerCase() !== 'paid') return null;
+  if (['delivered', 'cancelled', 'refunded'].includes(String(order.status || '').toLowerCase())) return null;
+
+  const { data: existing, error: existingError } = await operationsDb.from('deliveries')
+    .select('id,order_id,assigned_staff_id,status,created_at')
+    .eq('order_id', order.id).maybeSingle();
+  if (existingError) throw new HttpError(503, 'DELIVERY_ASSIGNMENT_LOOKUP_FAILED', 'Vine could not check the existing delivery assignment. Payment is recorded and assignment will be retried.');
+
+  let delivery = existing;
+  let created = false;
+  if (!delivery || !delivery.assigned_staff_id) {
+    const selectedStaff = await chooseRandomActiveFulfilmentStaff();
+    const now = new Date().toISOString();
+    if (!delivery) {
+      const { data: inserted, error: insertError } = await operationsDb.from('deliveries').insert({
+        order_id: order.id,
+        status: 'preparing',
+        assigned_staff_id: selectedStaff.user_id,
+        assigned_at: now,
+        created_by: null,
+        internal_notes: 'Automatically assigned after verified payment.'
+      }).select('id,order_id,assigned_staff_id,status,created_at').maybeSingle();
+      if (insertError) {
+        // A concurrent webhook may have inserted the unique order delivery first.
+        if (insertError.code !== '23505') throw new HttpError(503, 'DELIVERY_ASSIGNMENT_CREATE_FAILED', 'Payment is verified, but Vine could not create the delivery record. Assignment will be retried.');
+        const { data: raced, error: raceError } = await operationsDb.from('deliveries')
+          .select('id,order_id,assigned_staff_id,status,created_at').eq('order_id', order.id).maybeSingle();
+        if (raceError || !raced) throw new HttpError(503, 'DELIVERY_ASSIGNMENT_CREATE_FAILED', 'The delivery assignment needs reconciliation and will be retried.');
+        delivery = raced;
+      } else {
+        delivery = inserted;
+        created = true;
+      }
+    }
+
+    if (delivery && !delivery.assigned_staff_id) {
+      const { data: assigned, error: assignError } = await operationsDb.from('deliveries')
+        .update({ assigned_staff_id: selectedStaff.user_id, assigned_at: now, updated_at: now })
+        .eq('id', delivery.id).is('assigned_staff_id', null)
+        .select('id,order_id,assigned_staff_id,status,created_at').maybeSingle();
+      if (assignError) throw new HttpError(503, 'DELIVERY_ASSIGNMENT_SAVE_FAILED', 'The delivery exists, but Vine could not save its staff assignment. Assignment will be retried.');
+      if (assigned) delivery = assigned;
+      else {
+        const { data: latest, error: latestError } = await operationsDb.from('deliveries')
+          .select('id,order_id,assigned_staff_id,status,created_at').eq('id', delivery.id).maybeSingle();
+        if (latestError || !latest?.assigned_staff_id) throw new HttpError(503, 'DELIVERY_ASSIGNMENT_SAVE_FAILED', 'The delivery assignment needs reconciliation and will be retried.');
+        delivery = latest;
+      }
+    }
+  }
+
+  if (!delivery?.assigned_staff_id) throw new HttpError(503, 'DELIVERY_ASSIGNMENT_SAVE_FAILED', 'This paid order has no staff owner yet. Assignment will be retried.');
+
+  if (delivery.status === 'pending') {
+    const { data: preparingDelivery, error: preparingError } = await operationsDb.from('deliveries')
+      .update({ status: 'preparing', updated_at: new Date().toISOString() })
+      .eq('id', delivery.id).eq('status', 'pending')
+      .select('id,order_id,assigned_staff_id,status,created_at').maybeSingle();
+    if (preparingError) throw new HttpError(503, 'DELIVERY_STATUS_RECONCILE_FAILED', 'The paid order is assigned, but its fulfilment status needs reconciliation.');
+    if (preparingDelivery) delivery = preparingDelivery;
+    else {
+      const { data: latest, error: latestError } = await operationsDb.from('deliveries')
+        .select('id,order_id,assigned_staff_id,status,created_at').eq('id', delivery.id).maybeSingle();
+      if (latestError || !latest) throw new HttpError(503, 'DELIVERY_STATUS_RECONCILE_FAILED', 'The delivery status could not be confirmed.');
+      delivery = latest;
+    }
+  }
+  if (['delivered', 'failed', 'returned', 'cancelled'].includes(String(delivery.status || '').toLowerCase())) return delivery;
+
+  // Backfill the initial customer-visible milestone on retries as well as first creation.
+  // A failed event write must not leave a paid order permanently without a tracking timeline.
+  const { data: initialEvent, error: initialEventLookupError } = await operationsDb.from('delivery_events')
+    .select('id').eq('delivery_id', delivery.id).eq('status', 'preparing').limit(1).maybeSingle();
+  if (initialEventLookupError) throw new HttpError(503, 'DELIVERY_TIMELINE_LOOKUP_FAILED', 'The delivery is assigned, but its tracking history needs reconciliation.');
+  if (!initialEvent) {
+    const { error: eventError } = await operationsDb.from('delivery_events').insert({
+      delivery_id: delivery.id, status: 'preparing', note: 'Payment verified. Your order has entered Vine fulfilment.', source: 'system', actor_id: null
+    });
+    if (eventError) throw new HttpError(503, 'DELIVERY_TIMELINE_CREATE_FAILED', 'The delivery is assigned, but its first tracking update needs reconciliation.');
+  }
+  if (created) {
+    await addAudit({ action: 'delivery.auto_assigned', entityType: 'delivery', entityId: delivery.id, metadata: { orderId: order.id, assignedStaffId: delivery.assigned_staff_id, assignmentMethod: 'random_active_staff' } });
+  }
+
+  // Move the paid order into processing as its delivery record is created.
+  if (String(order.status || '').toLowerCase() === 'paid') {
+    const now = new Date().toISOString();
+    const { error: orderStatusError } = await ordersDb.from('orders').update({ status: 'processing', updated_at: now })
+      .eq('id', order.id).eq('payment_status', 'paid').eq('status', 'paid');
+    if (orderStatusError) throw new HttpError(503, 'ORDER_FULFILMENT_STATUS_SAVE_FAILED', 'The delivery has been assigned, but the order status needs reconciliation.');
+    await enqueueOrderNotice({ ...order, status: 'processing' }, 'customer.order_processing');
+  }
+  return delivery;
+}
+
 async function updateOrderAndPaymentPaid(payment, order, timestamp = new Date().toISOString()) {
   const { error: paymentError } = await ordersDb.from('payments').update({ status: 'paid', paid_at: timestamp, last_checked_at: timestamp, updated_at: timestamp }).eq('id', payment.id).neq('status', 'paid');
   if (paymentError) throw new HttpError(503, 'PAYMENT_UPDATE_FAILED', 'Payment status could not be saved. Provider confirmation will be retried.');
@@ -201,6 +338,7 @@ async function updateOrderAndPaymentPaid(payment, order, timestamp = new Date().
   const finalOrder = updatedOrder || { ...order, status: 'paid', payment_status: 'paid', paid_at: timestamp };
   const { error: ledgerError } = await operationsDb.rpc('record_vine_sale_once', { p_order_id: order.id, p_order_number: order.order_number, p_amount_kobo: Number(order.total_kobo), p_paid_at: timestamp });
   if (ledgerError) throw new HttpError(503, 'SALES_LEDGER_FAILED', 'The order is paid but sales analytics needs reconciliation. The event is safe to retry.');
+  await ensurePaidOrderDeliveryAssignment(finalOrder);
   await enqueueOrderNotice(finalOrder, 'customer.order_paid');
   return finalOrder;
 }
@@ -269,6 +407,7 @@ app.post('/api/v1/webhooks/paystack', express.raw({ type: 'application/json', li
     return res.status(200).json({ received: true });
   }
   if (payment.status === 'paid' && order.payment_status === 'paid') {
+    await ensurePaidOrderDeliveryAssignment(order);
     await ordersDb.from('payment_events').update({ processing_status: 'processed', processed_at: new Date().toISOString() }).eq('id', eventId);
     await operationsDb.rpc('record_vine_sale_once', { p_order_id: order.id, p_order_number: order.order_number, p_amount_kobo: Number(order.total_kobo), p_paid_at: order.paid_at || new Date().toISOString() });
     return res.status(200).json({ received: true });
@@ -397,15 +536,16 @@ app.post('/api/v1/admin/payments/:id/confirm-bank-transfer', auth, paymentAdmin,
 
 
 // Persisted delivery history is sourced from vine_operations and enriched from vine_orders_payments.
-app.get('/api/v1/admin/deliveries', auth, deliveryView, asyncRoute(async (req, res) => {
+app.get('/api/v1/admin/deliveries', auth, assignedDeliveryView, asyncRoute(async (req, res) => {
   const limit = clampInt(req.query.limit, 100, 1, 100);
   const status = String(req.query.status || '').trim().toLowerCase();
   const allowedStatuses = ['pending','preparing','dispatched','in_transit','delivered','failed','returned','cancelled'];
   if (status && !allowedStatuses.includes(status)) throw new HttpError(400, 'DELIVERY_STATUS_FILTER_INVALID', 'Choose a valid delivery status.');
   let query = operationsDb.from('deliveries')
-    .select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,dispatched_at,delivered_at,created_by,created_at,updated_at')
+    .select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,dispatched_at,delivered_at,created_by,created_at,updated_at,courier_name,courier_phone,internal_notes,assigned_staff_id,assigned_at')
     .order('created_at', { ascending: false }).limit(limit);
   if (status) query = query.eq('status', status);
+  if (req.deliveryAssignedOnly) query = query.eq('assigned_staff_id', req.user.id);
   const { data: deliveries, error } = await query;
   if (error) throw new HttpError(503, 'DELIVERIES_UNAVAILABLE', 'Saved delivery records could not be loaded.');
   const rows = deliveries || [];
@@ -416,8 +556,20 @@ app.get('/api/v1/admin/deliveries', auth, deliveryView, asyncRoute(async (req, r
     .in('id', orderIds);
   if (ordersError) throw new HttpError(503, 'DELIVERY_ORDERS_UNAVAILABLE', 'Delivery records loaded, but their linked order details could not be loaded.');
   const orderById = new Map((orderRows || []).map(order => [order.id, order]));
+  const assignedIds = [...new Set(rows.map(row => row.assigned_staff_id).filter(Boolean))];
+  let staffNameById = new Map();
+  if (assignedIds.length) {
+    const { data: staffProfiles, error: staffProfileError } = await accountsAdmin.from('profiles')
+      .select('user_id,full_name').in('user_id', assignedIds);
+    if (!staffProfileError) staffNameById = new Map((staffProfiles || []).map(row => [row.user_id, row.full_name]));
+  }
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
-    data: rows.map(delivery => ({ ...delivery, order: orderById.get(delivery.order_id) || null })),
+    data: rows.map(delivery => ({
+      ...delivery,
+      assignedStaff: delivery.assigned_staff_id ? { id: delivery.assigned_staff_id, fullName: staffNameById.get(delivery.assigned_staff_id) || 'Assigned Vine staff' } : null,
+      order: orderById.get(delivery.order_id) || null
+    })),
     total: rows.length, limit, status: status || 'all'
   });
 }));
@@ -429,7 +581,9 @@ app.post('/api/v1/admin/deliveries', auth, deliveryAdmin, asyncRoute(async (req,
   const { data: existing, error: existingError } = await operationsDb.from('deliveries').select('id,order_id,status').eq('order_id', order.id).maybeSingle();
   if (existingError) throw new HttpError(503, 'DELIVERY_LOOKUP_FAILED', 'Existing delivery status could not be checked. Try again.');
   if (existing) throw new HttpError(409, 'DELIVERY_EXISTS', 'A delivery record already exists for this order.');
-  const { data: delivery, error } = await operationsDb.from('deliveries').insert({ order_id: order.id, delivery_provider: input.provider || null, tracking_code: input.trackingCode || null, status: 'preparing', estimated_delivery_at: input.estimatedDeliveryAt || null, created_by: req.user.id, internal_notes: input.note || null }).select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,created_at').single();
+  const selectedStaff = await chooseRandomActiveFulfilmentStaff();
+  const assignedAt = new Date().toISOString();
+  const { data: delivery, error } = await operationsDb.from('deliveries').insert({ order_id: order.id, delivery_provider: input.provider || null, tracking_code: input.trackingCode || null, status: 'preparing', estimated_delivery_at: input.estimatedDeliveryAt || null, created_by: req.user.id, internal_notes: input.note || null, assigned_staff_id: selectedStaff.user_id, assigned_at: assignedAt }).select('id,order_id,delivery_provider,tracking_code,status,estimated_delivery_at,assigned_staff_id,assigned_at,created_at').single();
   if (error) throw new HttpError(503, 'DELIVERY_CREATE_FAILED', 'The delivery record could not be created.');
   const { error: eventError } = await operationsDb.from('delivery_events').insert({ delivery_id: delivery.id, status: 'preparing', note: input.note || 'Order accepted for fulfilment.', source: 'admin', actor_id: req.user.id });
   if (eventError) throw new HttpError(503, 'DELIVERY_EVENT_CREATE_FAILED', 'The delivery was created, but its activity history could not be recorded. Refresh before retrying.');
@@ -440,10 +594,10 @@ app.post('/api/v1/admin/deliveries', auth, deliveryAdmin, asyncRoute(async (req,
   res.status(201).json({ data: delivery });
 }));
 
-app.patch('/api/v1/admin/deliveries/:id/status', auth, deliveryAdmin, asyncRoute(async (req, res) => {
+app.patch('/api/v1/admin/deliveries/:id/status', auth, assignedDeliveryManage, asyncRoute(async (req, res) => {
   const id = uuidSchema.parse(req.params.id);
   const input = z.object({ status: z.enum(['preparing','dispatched','in_transit','delivered','failed','returned','cancelled']), trackingCode: optionalText(120), note: optionalText(1000) }).parse(req.body);
-  const { data: current, error: currentError } = await operationsDb.from('deliveries').select('id,order_id,status,tracking_code').eq('id', id).maybeSingle();
+  const { data: current, error: currentError } = await operationsDb.from('deliveries').select('id,order_id,status,tracking_code,assigned_staff_id').eq('id', id).maybeSingle();
   if (currentError) throw new HttpError(503, 'DELIVERY_UNAVAILABLE', 'The delivery record could not be loaded.');
   if (!current) throw new HttpError(404, 'DELIVERY_NOT_FOUND', 'That delivery record was not found.');
   const allowed = {
@@ -493,6 +647,41 @@ app.post('/api/v1/admin/notifications/:id/requeue', auth, notificationsManage, a
   await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'notification.requeued', entityType: 'notification_job', entityId: id, requestId: req.id });
   res.json({ data });
 }));
+
+registerDeliveryTrackingRoutes({ app, auth, ordersDb, operationsDb, productsDb });
+registerAdminDeliveryDetailsRoute({ app, auth, deliveryAdmin: assignedDeliveryManage, operationsDb, addAudit });
+
+// Reconcile recent paid orders after deployment/restart so existing successful orders also gain tracking.
+async function reconcileRecentPaidOrderDeliveries() {
+  const { data: paidOrders, error: paidOrdersError } = await ordersDb.from('orders')
+    .select('id,order_number,status,payment_status,total_kobo,email')
+    .eq('payment_status', 'paid').order('paid_at', { ascending: false }).limit(250);
+  if (paidOrdersError) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'paid_order_delivery_reconciliation_failed', code: paidOrdersError.code || 'DB_ERROR' }));
+    return;
+  }
+  const eligibleOrders = (paidOrders || []).filter(order => !['cancelled', 'refunded'].includes(String(order.status || '').toLowerCase()));
+  if (!eligibleOrders.length) return;
+  const orderIds = eligibleOrders.map(order => order.id);
+  const { data: existingDeliveries, error: deliveriesError } = await operationsDb.from('deliveries')
+    .select('order_id,assigned_staff_id,status').in('order_id', orderIds);
+  if (deliveriesError) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'paid_order_delivery_reconciliation_failed', code: deliveriesError.code || 'DB_ERROR' }));
+    return;
+  }
+  const deliveryByOrder = new Map((existingDeliveries || []).map(row => [row.order_id, row]));
+  for (const order of eligibleOrders) {
+    const delivery = deliveryByOrder.get(order.id);
+    if (delivery?.assigned_staff_id) continue;
+    if (String(order.status || '').toLowerCase() === 'delivered') continue;
+    if (delivery && ['delivered', 'failed', 'returned', 'cancelled'].includes(String(delivery.status || '').toLowerCase())) continue;
+    try { await ensurePaidOrderDeliveryAssignment(order); }
+    catch (error) {
+      console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'paid_order_delivery_assignment_retry_needed', orderId: order.id, code: error?.code || error?.name || 'ASSIGNMENT_FAILED' }));
+    }
+  }
+}
+setTimeout(() => { void reconcileRecentPaidOrderDeliveries(); }, 2500).unref();
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);
