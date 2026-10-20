@@ -31,6 +31,7 @@ const integrationsView = requirePermission(accountsAdmin, 'integrations.view', [
 // Staff with the regular delivery permissions and the owner retain their existing wider scope.
 async function assignedDeliveryView(req, _res, next) {
   try {
+    await reconcileInactiveStaffAssignments();
     const access = await resolveStaffAccess(accountsAdmin, req.user);
     req.staffAccess = access;
     req.deliveryAssignedOnly = !access.permissions.some(key => key === '*' || key === 'deliveries.view' || key === 'deliveries.manage');
@@ -40,6 +41,7 @@ async function assignedDeliveryView(req, _res, next) {
 
 async function assignedDeliveryManage(req, _res, next) {
   try {
+    await reconcileInactiveStaffAssignments();
     const access = await resolveStaffAccess(accountsAdmin, req.user);
     req.staffAccess = access;
     if (access.permissions.includes('*') || access.permissions.includes('deliveries.manage')) return next();
@@ -221,17 +223,130 @@ async function loadOrderForPayment(orderId) {
   return data;
 }
 
-async function chooseRandomActiveFulfilmentStaff() {
-  const { data: memberships, error: membershipError } = await accountsAdmin.from('staff_memberships')
+async function loadAssignmentRoster() {
+  const { data: memberships, error } = await accountsAdmin.from('staff_memberships')
     .select('user_id,role_id,status,staff_roles(name,is_owner_role)')
     .eq('status', 'active');
-  if (membershipError) throw new HttpError(503, 'FULFILMENT_STAFF_UNAVAILABLE', 'Vine could not load the active staff roster. Order assignment will be retried.');
-  const candidates = (memberships || []).filter(member => {
+  if (error) throw new HttpError(503, 'FULFILMENT_STAFF_UNAVAILABLE', 'Vine could not check staff availability. Order assignment will be retried.');
+  const active = (memberships || []).filter(member => member.user_id);
+  const staff = active.filter(member => {
     const role = Array.isArray(member.staff_roles) ? member.staff_roles[0] : member.staff_roles;
-    return member.user_id && !role?.is_owner_role && String(role?.name || '').trim().toLowerCase() !== 'owner';
+    return !role?.is_owner_role && String(role?.name || '').trim().toLowerCase() !== 'owner';
   });
-  if (!candidates.length) throw new HttpError(503, 'FULFILMENT_STAFF_UNAVAILABLE', 'No active non-owner Vine staff are available to receive this order. Activate a staff membership and retry assignment.');
-  return candidates[crypto.randomInt(0, candidates.length)];
+  const ownerMembers = active.filter(member => {
+    const role = Array.isArray(member.staff_roles) ? member.staff_roles[0] : member.staff_roles;
+    return Boolean(role?.is_owner_role) || String(role?.name || '').trim().toLowerCase() === 'owner';
+  });
+  const configuredOwnerId = String(process.env.VINE_OWNER_USER_ID || '').trim();
+  const owner = ownerMembers.find(member => member.user_id === configuredOwnerId) || ownerMembers[0] || null;
+  // The configured owner ID is a last-resort fallback only; validate it against Auth before use.
+  if (!owner && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(configuredOwnerId)) {
+    const { data: ownerUser, error: ownerLookupError } = await accountsAdmin.auth.admin.getUserById(configuredOwnerId);
+    if (!ownerLookupError && ownerUser?.user?.id) ownerMembers.push({ user_id: ownerUser.user.id, role_id: null, status: 'configured-owner-fallback' });
+  }
+  const fallbackOwner = owner || ownerMembers[0] || null;
+  return { staff, owner: fallbackOwner };
+}
+
+async function chooseRandomActiveFulfilmentStaff(excludeUserIds = []) {
+  const roster = await loadAssignmentRoster();
+  const excluded = new Set(excludeUserIds);
+  const candidates = roster.staff.filter(member => !excluded.has(member.user_id));
+  if (candidates.length) return { ...candidates[crypto.randomInt(0, candidates.length)], assignmentFallback: false };
+  if (roster.owner?.user_id) return { ...roster.owner, assignmentFallback: true };
+  throw new HttpError(503, 'FULFILMENT_STAFF_UNAVAILABLE', 'No active fulfilment team members are available. Vine could not verify the owner fallback, so this order remains safely queued for assignment.');
+}
+
+const NON_TERMINAL_ASSIGNMENT_STATUSES = ['pending', 'preparing', 'dispatched', 'in_transit', 'failed', 'returned'];
+
+async function reassignStaffDeliveries(staffUserId, actorId = null) {
+  const roster = await loadAssignmentRoster();
+  const ownerId = roster.owner?.user_id || null;
+  if (!roster.staff.length && !ownerId) {
+    throw new HttpError(503, 'DELIVERY_OWNER_FALLBACK_UNAVAILABLE', 'No active fulfilment staff or verified owner account is available. Order responsibility could not be safely transferred.');
+  }
+  let reassigned = 0;
+  let assignedToOwner = 0;
+  let skipped = 0;
+  // Repeatedly read the first page because each successful transfer removes that row
+  // from the suspended worker's queue. This avoids offset skips when queues are large.
+  for (let batch = 0; batch < 100; batch += 1) {
+    const { data: deliveries, error } = await operationsDb.from('deliveries')
+      .select('id,order_id,status,assigned_staff_id,internal_notes')
+      .eq('assigned_staff_id', staffUserId)
+      .in('status', NON_TERMINAL_ASSIGNMENT_STATUSES)
+      .order('created_at', { ascending: true })
+      .limit(200);
+    if (error) throw new HttpError(503, 'DELIVERY_REASSIGN_LOOKUP_FAILED', 'Vine could not load the suspended worker’s delivery queue. Please retry the transfer.');
+    if (!deliveries?.length) break;
+    let changedInBatch = 0;
+    for (const delivery of deliveries) {
+      const candidates = roster.staff.filter(member => member.user_id !== staffUserId);
+      const target = candidates.length
+        ? candidates[crypto.randomInt(0, candidates.length)]
+        : (ownerId ? { user_id: ownerId } : null);
+      if (!target?.user_id) { skipped += 1; continue; }
+      const now = new Date().toISOString();
+      const nextNote = [delivery.internal_notes, `Responsibility reassigned on ${now} because the previous staff assignment is no longer active.`]
+        .filter(Boolean).join('\n').slice(-5000);
+      const { data: updated, error: updateError } = await operationsDb.from('deliveries')
+        .update({ assigned_staff_id: target.user_id, assigned_at: now, updated_at: now, internal_notes: nextNote })
+        .eq('id', delivery.id).eq('assigned_staff_id', staffUserId)
+        .select('id,order_id,status,assigned_staff_id').maybeSingle();
+      if (updateError) throw new HttpError(503, 'DELIVERY_REASSIGN_SAVE_FAILED', 'Vine could not finish transferring a delivery. Refresh the workspace and retry.');
+      if (!updated) { skipped += 1; continue; }
+      const recipientLabel = target.user_id === ownerId && !candidates.length ? 'the Vine owner' : 'another available Vine team member';
+      const { error: eventError } = await operationsDb.from('delivery_events').insert({
+        delivery_id: updated.id,
+        status: updated.status,
+        note: `Vine transferred order responsibility to ${recipientLabel} to keep delivery updates moving.`,
+        source: 'system',
+        actor_id: null
+      });
+      if (eventError) {
+        console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'delivery_reassignment_timeline_failed', deliveryId: updated.id, code: eventError.code || 'DB_ERROR' }));
+      }
+      try {
+        await addAudit({ actorId, actorType: actorId ? 'admin' : 'system', action: 'delivery.assignment_transferred', entityType: 'delivery', entityId: updated.id, metadata: { previousStaffId: staffUserId, nextStaffId: target.user_id, fallbackOwner: target.user_id === ownerId && !candidates.length, reason: 'staff_unavailable' } });
+      } catch (auditError) {
+        console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'delivery_reassignment_audit_failed', deliveryId: updated.id, code: auditError?.code || 'AUDIT_WRITE_FAILED' }));
+      }
+      reassigned += 1;
+      if (target.user_id === ownerId && !candidates.length) assignedToOwner += 1;
+      changedInBatch += 1;
+    }
+    if (changedInBatch === 0) break;
+  }
+  return { reassigned, assignedToOwner, skipped };
+}
+
+let assignmentReconcileInProgress = null;
+async function reconcileInactiveStaffAssignments() {
+  if (assignmentReconcileInProgress) return assignmentReconcileInProgress;
+  assignmentReconcileInProgress = (async () => {
+    const roster = await loadAssignmentRoster();
+    const activeIds = new Set([...roster.staff, ...(roster.owner ? [roster.owner] : [])].map(member => member.user_id));
+    const inactiveIds = new Set();
+    // Narrow the scan in Postgres to assignments whose staff IDs are not active. This
+    // avoids rereading every healthy delivery as the marketplace grows. Sort by the
+    // immutable delivery ID so paginated scans remain stable while assignments change.
+    const activeIdList = [...activeIds].filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id));
+    for (let from = 0; from < 1_000_000; from += 1000) {
+      let query = operationsDb.from('deliveries')
+        .select('id,assigned_staff_id,status')
+        .not('assigned_staff_id', 'is', null)
+        .in('status', NON_TERMINAL_ASSIGNMENT_STATUSES);
+      if (activeIdList.length) query = query.not('assigned_staff_id', 'in', `(${activeIdList.join(',')})`);
+      const { data, error } = await query.order('id', { ascending: true }).range(from, from + 999);
+      if (error) throw new HttpError(503, 'DELIVERY_REASSIGN_SCAN_FAILED', 'Vine could not verify delivery ownership. Retry the delivery workspace.');
+      for (const delivery of data || []) if (delivery.assigned_staff_id && !activeIds.has(delivery.assigned_staff_id)) inactiveIds.add(delivery.assigned_staff_id);
+      if (!data || data.length < 1000) break;
+    }
+    const results = [];
+    for (const userId of inactiveIds) results.push({ userId, ...(await reassignStaffDeliveries(userId)) });
+    return results;
+  })().finally(() => { assignmentReconcileInProgress = null; });
+  return assignmentReconcileInProgress;
 }
 
 async function ensurePaidOrderDeliveryAssignment(order) {
@@ -623,6 +738,22 @@ app.patch('/api/v1/admin/deliveries/:id/status', auth, assignedDeliveryManage, a
   res.json({ data: delivery });
 }));
 
+app.post('/api/v1/admin/staff/:userId/reconcile-deliveries', auth, asyncRoute(async (req, res) => {
+  const access = await resolveStaffAccess(accountsAdmin, req.user);
+  if (!access.isOwner) throw new HttpError(403, 'OWNER_REQUIRED', 'Only the Vine owner can trigger a staff delivery handover.');
+  const staffUserId = uuidSchema.parse(req.params.userId);
+  const { data: membership, error: membershipError } = await accountsAdmin.from('staff_memberships')
+    .select('user_id,status,staff_roles(name,is_owner_role)').eq('user_id', staffUserId).maybeSingle();
+  if (membershipError) throw new HttpError(503, 'STAFF_STATUS_CHECK_FAILED', 'Vine could not verify the worker’s current access status.');
+  if (!membership) throw new HttpError(404, 'STAFF_NOT_FOUND', 'That staff assignment could not be found.');
+  if (membership.status !== 'suspended') throw new HttpError(409, 'STAFF_NOT_SUSPENDED', 'Delivery handover is only available after a staff account has been suspended.');
+  const role = Array.isArray(membership.staff_roles) ? membership.staff_roles[0] : membership.staff_roles;
+  if (role?.is_owner_role || String(role?.name || '').trim().toLowerCase() === 'owner') throw new HttpError(403, 'OWNER_HANDOVER_BLOCKED', 'The owner account cannot be handled as a staff suspension.');
+  const result = await reassignStaffDeliveries(staffUserId, req.user.id);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ data: { staffUserId, ...result, destination: result.assignedToOwner ? 'owner' : 'available_staff' } });
+}));
+
 app.get('/api/v1/admin/analytics/daily-sales', auth, analyticsAdmin, asyncRoute(async (req, res) => {
   const days = clampInt(req.query.days, 30, 1, 365);
   const since = new Date(Date.now() - (days - 1) * 86_400_000).toISOString().slice(0,10);
@@ -681,7 +812,14 @@ async function reconcileRecentPaidOrderDeliveries() {
     }
   }
 }
-setTimeout(() => { void reconcileRecentPaidOrderDeliveries(); }, 2500).unref();
+setTimeout(() => {
+  void reconcileRecentPaidOrderDeliveries();
+  void reconcileInactiveStaffAssignments().catch(error => console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inactive_staff_assignment_reconcile_failed', code: error?.code || error?.name || 'RECONCILE_FAILED' })));
+}, 2500).unref();
+const assignmentGuardTimer = setInterval(() => {
+  void reconcileInactiveStaffAssignments().catch(error => console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inactive_staff_assignment_reconcile_failed', code: error?.code || error?.name || 'RECONCILE_FAILED' })));
+}, 60_000);
+assignmentGuardTimer.unref();
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);
