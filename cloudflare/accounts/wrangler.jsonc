@@ -1,0 +1,48 @@
+{
+  "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+  "name": "vine-accounts-api-cf",
+  "main": "./worker.js",
+  "compatibility_date": "2026-10-20",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "AccountsContainer",
+      "max_instances": 1,
+      "scheduling_policy": "durable_object",
+      "images": {
+        "accounts": {
+          "dockerfile": "../../Dockerfile.accounts"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ACCOUNTS_CONTAINER",
+        "class_name": "AccountsContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "AccountsContainer"
+      ]
+    }
+  ],
+  "vars": {
+    "NODE_ENV": "production",
+    "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
+    "VINE_OWNER_EMAIL": "donchester111@gmail.com",
+    "VINE_STAFF_INVITE_REDIRECT_URL": "https://vinestore.com.ng/vineger.html",
+    "GMAIL_SENDER_EMAIL": "vinestore1official@gmail.com",
+    "GOOGLE_OAUTH_REDIRECT_URI": "https://vine-fnoh.onrender.com/api/v1/email/google/callback"
+  }
+}
