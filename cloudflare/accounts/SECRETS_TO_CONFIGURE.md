@@ -1,6 +1,6 @@
 # Private Worker settings
 
-Set these as **Worker secrets** in the Cloudflare dashboard. Never commit their values.
+These are variable names only. Set the values in the matching Cloudflare Worker dashboard under **Settings → Variables and Secrets**. Keep values out of Wrangler files, frontend files, and GitHub.
 
 - `AUTH_SUPABASE_ANON_KEY`
 - `ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY`
@@ -14,4 +14,4 @@ Set these as **Worker secrets** in the Cloudflare dashboard. Never commit their 
 - `GOOGLE_OAUTH_REFRESH_TOKEN`
 - `ALLOWED_ORIGINS`
 
-Also copy the current value of `ALLOWED_ORIGINS` from the existing Render service. Do not replace it with an invented value. The Store API configuration now sets `CHECKOUT_ENABLED=true`. The existing Supabase owner settings (`commerce.checkoutEnabled`) and payment-method settings remain additional runtime gates; confirm them and verify payment-provider secrets/webhooks before taking real orders.
+Retain the already-configured `ALLOWED_ORIGINS` value in Cloudflare. Do not replace it with a placeholder or an invented value. The Store Worker reads `CHECKOUT_ENABLED` from its Cloudflare dashboard setting; it is deliberately not hard-coded in `wrangler.jsonc`. The existing Supabase owner setting (`commerce.checkoutEnabled`) and payment-method settings remain additional runtime gates. Verify provider secrets and webhooks before taking real orders.
