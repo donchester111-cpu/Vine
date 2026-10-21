@@ -140,7 +140,7 @@ async function getGmailAccessToken(env) {
   if (!response.ok || !payload?.access_token) {
     const providerCode = String(payload?.error || 'TOKEN_REFRESH_FAILED').slice(0, 80);
     console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME || 'vine', provider: 'google-gmail', status: response.status, code: providerCode }));
-    throw new HttpError(503, 'GMAIL_REAUTH_REQUIRED', 'Vine could not refresh its Gmail authorisation. Reconnect the Google account and update GOOGLE_OAUTH_REFRESH_TOKEN in Render.');
+    throw new HttpError(503, 'GMAIL_REAUTH_REQUIRED', 'Vine could not refresh its Gmail authorisation. Reconnect the Google account and update GOOGLE_OAUTH_REFRESH_TOKEN in the Cloudflare dashboard for both Accounts and Operations Workers.');
   }
   return String(payload.access_token);
 }
