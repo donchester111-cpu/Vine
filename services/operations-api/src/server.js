@@ -812,24 +812,23 @@ async function reconcileRecentPaidOrderDeliveries() {
     }
   }
 }
-setTimeout(() => {
-  void reconcileRecentPaidOrderDeliveries();
-  void reconcileInactiveStaffAssignments().catch(error => console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inactive_staff_assignment_reconcile_failed', code: error?.code || error?.name || 'RECONCILE_FAILED' })));
-}, 2500).unref();
-const assignmentGuardTimer = setInterval(() => {
-  void reconcileInactiveStaffAssignments().catch(error => console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inactive_staff_assignment_reconcile_failed', code: error?.code || error?.name || 'RECONCILE_FAILED' })));
-}, 60_000);
-assignmentGuardTimer.unref();
+// Cloudflare Workers are request-driven; scheduled reconciliation is invoked by the
+// Operations Worker cron trigger instead of process-lifetime timers.
+export async function runScheduledOperations() {
+  await reconcileRecentPaidOrderDeliveries();
+  try {
+    await reconcileInactiveStaffAssignments();
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'inactive_staff_assignment_reconcile_failed', code: error?.code || error?.name || 'RECONCILE_FAILED' }));
+  }
+  if (isVineEmailConfigured()) await processNotificationQueue();
+}
 
 finishApp(app);
 const port = Number(process.env.PORT || 10000);
 app.listen(port, '0.0.0.0', () => {
-  console.log(JSON.stringify({ level: 'info', service: process.env.SERVICE_NAME, port, emailDeliveryConfigured: isVineEmailConfigured() }));
-  if (isVineEmailConfigured()) {
-    void processNotificationQueue();
-    const workerTimer = setInterval(() => { void processNotificationQueue(); }, 30_000);
-    workerTimer.unref();
-  } else {
+  console.log(JSON.stringify({ level: 'info', service: process.env.SERVICE_NAME, port, emailDeliveryConfigured: isVineEmailConfigured(), notificationWorker: 'cloudflare-cron' }));
+  if (!isVineEmailConfigured()) {
     console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'notification_worker_not_started', code: 'EMAIL_PROVIDER_NOT_CONFIGURED' }));
   }
 });
