@@ -1,41 +1,15 @@
 {
   "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
-  "name": "vine-accounts-api-cf",
+  "name": "accounts-api",
   "main": "./worker.js",
   "compatibility_date": "2026-10-20",
   "compatibility_flags": [
-    "nodejs_compat"
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env"
   ],
   "observability": {
     "enabled": true
   },
-  "containers": [
-    {
-      "class_name": "AccountsContainer",
-      "scheduling_policy": "durable_object",
-      "images": {
-        "accounts": {
-          "dockerfile": "../../Dockerfile.accounts"
-        }
-      }
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "ACCOUNTS_CONTAINER",
-        "class_name": "AccountsContainer"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "AccountsContainer"
-      ]
-    }
-  ],
   "vars": {
     "NODE_ENV": "production",
     "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
