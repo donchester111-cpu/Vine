@@ -1,4 +1,3 @@
-
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "operations-api",
@@ -19,5 +18,10 @@
     "ORDERS_SUPABASE_URL": "https://ybwdecxsbveiobfvwkvr.supabase.co",
     "OPERATIONS_SUPABASE_URL": "https://sqtntfnbjtguqddvvsly.supabase.co",
     "CHECKOUT_ENABLED": "true"
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
   }
 }
