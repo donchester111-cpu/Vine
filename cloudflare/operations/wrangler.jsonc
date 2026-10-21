@@ -7,14 +7,8 @@
     "nodejs_compat",
     "nodejs_compat_populate_process_env"
   ],
-  "workers_dev": true,
-  "preview_urls": true,
+  "keep_vars": true,
   "observability": {
     "enabled": true
-  },
-  "triggers": {
-    "crons": [
-      "*/5 * * * *"
-    ]
   }
 }
