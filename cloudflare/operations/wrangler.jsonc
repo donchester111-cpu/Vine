@@ -1,27 +1,23 @@
+
 {
-  "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "operations-api",
-  "main": "./worker.js",
-  "compatibility_date": "2026-10-20",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-21",
   "compatibility_flags": [
-    "nodejs_compat",
-    "nodejs_compat_populate_process_env"
+    "nodejs_compat"
   ],
+  "workers_dev": true,
+  "preview_urls": true,
   "observability": {
     "enabled": true
   },
   "vars": {
     "NODE_ENV": "production",
     "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
-    "VINE_OWNER_EMAIL": "donchester111@gmail.com",
-    "GMAIL_SENDER_EMAIL": "vinestore1official@gmail.com",
     "PRODUCTS_SUPABASE_URL": "https://xiehbdaaioifjcbnvpqf.supabase.co",
     "ORDERS_SUPABASE_URL": "https://ybwdecxsbveiobfvwkvr.supabase.co",
-    "OPERATIONS_SUPABASE_URL": "https://sqtntfnbjtguqddvvsly.supabase.co"
-  },
-  "triggers": {
-    "crons": [
-      "* * * * *"
-    ]
+    "OPERATIONS_SUPABASE_URL": "https://sqtntfnbjtguqddvvsly.supabase.co",
+    "CHECKOUT_ENABLED": "true"
   }
 }
