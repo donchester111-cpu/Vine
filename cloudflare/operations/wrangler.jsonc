@@ -1,41 +1,15 @@
 {
   "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
-  "name": "vine-operations-api-cf",
+  "name": "operations-api",
   "main": "./worker.js",
   "compatibility_date": "2026-10-20",
   "compatibility_flags": [
-    "nodejs_compat"
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env"
   ],
   "observability": {
     "enabled": true
   },
-  "containers": [
-    {
-      "class_name": "OperationsContainer",
-      "scheduling_policy": "durable_object",
-      "images": {
-        "operations": {
-          "dockerfile": "../../Dockerfile.operations"
-        }
-      }
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "OPERATIONS_CONTAINER",
-        "class_name": "OperationsContainer"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "OperationsContainer"
-      ]
-    }
-  ],
   "vars": {
     "NODE_ENV": "production",
     "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
@@ -44,5 +18,10 @@
     "PRODUCTS_SUPABASE_URL": "https://xiehbdaaioifjcbnvpqf.supabase.co",
     "ORDERS_SUPABASE_URL": "https://ybwdecxsbveiobfvwkvr.supabase.co",
     "OPERATIONS_SUPABASE_URL": "https://sqtntfnbjtguqddvvsly.supabase.co"
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
   }
 }
