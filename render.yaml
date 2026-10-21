@@ -41,7 +41,7 @@ services:
       - key: GOOGLE_OAUTH_REFRESH_TOKEN
         sync: false
       - key: GOOGLE_OAUTH_REDIRECT_URI
-        value: https://vine-fnoh.onrender.com/api/v1/email/google/callback
+        value: https://accounts-api.donchester111.workers.dev/api/v1/email/google/callback
       - key: ALLOWED_ORIGINS
         sync: false
 

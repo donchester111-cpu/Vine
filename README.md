@@ -1,5 +1,8 @@
 # Vine — integrated storefront and operations
 
+> **Current deployment target:** Cloudflare Workers. Follow [`cloudflare/README.md`](cloudflare/README.md) for current build/deploy settings. The Render-specific instructions and incident notes below describe the previous deployment and are retained as historical context; do not use them to configure the current Workers.
+
+
 Vine is a Nigerian online retail store. Vine owns the customer relationship, catalogue, order processing, supplier coordination, customer reviews, delivery workflow, and staff permissions. It is not a public seller marketplace.
 
 This archive is the complete source for a **controlled deployment** of the current Vine code. It has not been deployed or pushed to GitHub by this archive-generation process. The live Supabase projects have been inspected and the listed database changes applied directly using the connected Supabase access. Payment configuration and checkout activation remain intentionally untouched.
@@ -19,11 +22,11 @@ This archive is the complete source for a **controlled deployment** of the curre
 
 | Service | URL | Used for |
 |---|---|---|
-| Accounts API | `https://vine-fnoh.onrender.com` | Customer sessions, profiles, staff identity/roles and owner management |
-| Store API | `https://vine-store-api.onrender.com` | Live product catalogue, images, reviews, Q&A, stock and product administration |
-| Operations API | `https://vine-operations-api.onrender.com` | Orders, delivery history/status, verified sales analytics and notification delivery |
+| Accounts API | `https://accounts-api.donchester111.workers.dev` | Customer sessions, profiles, staff identity/roles and owner management |
+| Store API | `https://store-api.donchester111.workers.dev` | Live product catalogue, images, reviews, Q&A, stock and product administration |
+| Operations API | `https://operations-api.donchester111.workers.dev` | Orders, delivery history/status, verified sales analytics and notification delivery |
 
-The browser uses only public URLs and the Supabase publishable key. Service-role keys, the owner password and session-signing secret belong only in private Render environment variables.
+The browser uses only public URLs and the Supabase publishable key. Service-role keys, the owner password and session-signing secret belong only in private Cloudflare Worker secrets.
 
 ## Isolated Supabase projects
 
@@ -49,9 +52,9 @@ Passwordless staff sign-in and staff invitations generate secure Supabase magic/
 Before email can actually be sent, the existing Render Accounts and Operations services need private environment variables:
 
 - Optional Resend route: `RESEND_API_KEY` and `VINE_EMAIL_FROM` on a verified domain.
-- Free Gmail API route: `GMAIL_SENDER_EMAIL`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `GOOGLE_OAUTH_REFRESH_TOKEN` on the Accounts and Operations services. The Accounts service also needs `GOOGLE_OAUTH_REDIRECT_URI=https://vine-fnoh.onrender.com/api/v1/email/google/callback`. Complete the connection only after this source has been deployed. Keep every secret only in Render, never in browser files or GitHub. Google refresh tokens from an external app left in Testing can expire, so this is not represented as a permanent production email setup.
+- Free Gmail API route: `GMAIL_SENDER_EMAIL`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `GOOGLE_OAUTH_REFRESH_TOKEN` on the Accounts and Operations services. The Accounts service also needs `GOOGLE_OAUTH_REDIRECT_URI=https://accounts-api.donchester111.workers.dev/api/v1/email/google/callback`. Complete the connection only after this source has been deployed. Keep every secret only in Cloudflare Worker secrets, never in browser files or GitHub. Google refresh tokens from an external app left in Testing can expire, so this is not represented as a permanent production email setup.
 
-No key or verified sender credential was available to this session, so none has been invented. A ZIP cannot make third-party email deliver without these provider credentials. After entering them in Render, use the private service logs and a real invited staff account to verify delivery. Supabase Auth's Site URL and redirect allowlist must include the actual `https://vinestore.com.ng/vineger.html` URL.
+No key or verified sender credential was available to this session, so none has been invented. A ZIP cannot make third-party email deliver without these provider credentials. After confirming them in the Cloudflare Worker dashboard, use Worker logs and a real invited staff account to verify delivery. Supabase Auth's Site URL and redirect allowlist must include the actual `https://vinestore.com.ng/vineger.html` URL.
 
 ### Owner session agreement across services
 
@@ -74,7 +77,7 @@ Set `ALLOWED_ORIGINS` to the exact deployed storefront origin(s), comma-separate
 1. Inspect the target service's current environment before merging values. Preserve its live Supabase service keys; do not replace them with `.env.example` blanks.
 2. Deploy the source in this archive to the matching Render service paths/configuration. This archive-generation process does not write to GitHub or automatically trigger a deployment.
 3. Configure the same owner-session values on all three APIs and configure a verified transactional sender in Resend. This is necessary for owner cross-service access and staff sign-in email delivery.
-4. Verify the customer storefront at `https://vine-store-api.onrender.com/`, then verify each `/health` and `/ready` endpoint. From `vineowner.html`, run the authenticated service checks; a public health response alone does not prove protected API access.
+4. Verify the customer storefront at `https://store-api.donchester111.workers.dev/`, then verify each `/health` and `/ready` endpoint. From `vineowner.html`, run the authenticated service checks; a public health response alone does not prove protected API access.
 5. Test invited-staff sign-in with a real email, then create/edit/archive a product, upload the main and gallery images, publish a customer question answer, create/update a delivery on a paid order, and inspect the audit/notification records.
 6. Keep `CHECKOUT_ENABLED=false` until product sourcing, available stock, delivery coverage/fees, payment instructions/provider configuration, webhook and reconciliation checks are intentionally reviewed. Payment settings were not changed in this work.
 
