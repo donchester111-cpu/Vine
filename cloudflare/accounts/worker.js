@@ -3,24 +3,10 @@ import { assertRequiredEnv } from "../../packages/shared/src/env.js";
 
 const SERVICE = "accounts-api";
 const REQUIRED_ENV = [
+  // Required to initialize Supabase Auth and the accounts-admin client.
   "AUTH_SUPABASE_URL",
   "AUTH_SUPABASE_ANON_KEY",
-  "ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY",
-  "ALLOWED_ORIGINS",
-  "OWNER_PASSWORD",
-  "OWNER_SESSION_SECRET",
-  "VINE_OWNER_EMAIL",
-  "VINE_OWNER_USER_ID",
-  "VINE_STAFF_INVITE_REDIRECT_URL",
-  "GOOGLE_OAUTH_CLIENT_ID",
-  "GOOGLE_OAUTH_CLIENT_SECRET",
-  "GOOGLE_OAUTH_REDIRECT_URI",
-  "GOOGLE_OAUTH_REFRESH_TOKEN",
-  "GMAIL_SENDER_EMAIL",
-  "RESEND_API_KEY",
-  "VINE_EMAIL_FROM",
-  "PAYSTACK_SECRET_KEY",
-  "SMS_PROVIDER"
+  "ACCOUNTS_SUPABASE_SERVICE_ROLE_KEY"
 ];
 
 let runtimePromise;
