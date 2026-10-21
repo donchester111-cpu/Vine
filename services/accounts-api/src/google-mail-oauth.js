@@ -9,8 +9,22 @@ const pendingStates = new Map();
 const STATE_TTL_MS = 10 * 60 * 1000;
 
 function redirectUri(env = process.env) {
-  const base = String(env.RENDER_EXTERNAL_URL || 'https://vine-fnoh.onrender.com').trim().replace(/\/+$/, '');
-  const uri = String(env.GOOGLE_OAUTH_REDIRECT_URI || `${base}/api/v1/email/google/callback`).trim();
+  const cloudflareCallback = 'https://accounts-api.donchester111.workers.dev/api/v1/email/google/callback';
+  const configured = String(env.GOOGLE_OAUTH_REDIRECT_URI || '').trim();
+  let uri = configured || cloudflareCallback;
+
+  // A legacy Render URL must not silently keep OAuth tied to the retired deployment.
+  if (configured) {
+    try {
+      const configuredUrl = new URL(configured);
+      if (configuredUrl.hostname === 'onrender.com' || configuredUrl.hostname.endsWith('.onrender.com')) {
+        uri = cloudflareCallback;
+      }
+    } catch {
+      // The validation below reports a clear error for malformed configured URLs.
+    }
+  }
+
   const parsed = new URL(uri);
   if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost') throw new Error('GOOGLE_OAUTH_REDIRECT_URI must use HTTPS.');
   return uri;
@@ -44,7 +58,7 @@ export function registerGoogleMailOAuthRoutes(app) {
       const clientSecret = String(process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
       const sender = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
       if (!clientId || !clientSecret || !/^\S+@\S+\.\S+$/.test(sender)) {
-        return safePage(res, 503, 'Gmail connection not configured', 'First add GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, and GMAIL_SENDER_EMAIL to the Vine Accounts API environment in Render.');
+        return safePage(res, 503, 'Gmail connection not configured', 'Configure GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, and GMAIL_SENDER_EMAIL in the Cloudflare Accounts Worker settings.');
       }
       const state = crypto.randomBytes(32).toString('base64url');
       const now = Date.now();
@@ -63,7 +77,7 @@ export function registerGoogleMailOAuthRoutes(app) {
       });
       return res.redirect(302, `${GOOGLE_AUTH_ENDPOINT}?${params.toString()}`);
     } catch (error) {
-      return safePage(res, 500, 'Could not start Gmail connection', error?.message || 'Check the Google OAuth configuration in Render.');
+      return safePage(res, 500, 'Could not start Gmail connection', error?.message || 'Check the Google OAuth configuration in the Cloudflare Accounts Worker settings.');
     }
   });
 
@@ -85,7 +99,7 @@ export function registerGoogleMailOAuthRoutes(app) {
       const clientId = String(process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
       const clientSecret = String(process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
       const expectedSender = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
-      if (!clientId || !clientSecret || !expectedSender) return safePage(res, 503, 'Gmail connection is not configured', 'Add the Google OAuth client details and sender email to Render, then restart the connection.');
+      if (!clientId || !clientSecret || !expectedSender) return safePage(res, 503, 'Gmail connection is not configured', 'Check the Google OAuth client details and sender email in the Cloudflare Accounts Worker settings, then restart the connection.');
       const uri = redirectUri();
       const tokenResponse = await fetchGoogle(GOOGLE_TOKEN_ENDPOINT, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -95,7 +109,7 @@ export function registerGoogleMailOAuthRoutes(app) {
       try { tokens = await tokenResponse.json(); } catch { /* handled below */ }
       if (!tokenResponse.ok || !tokens?.access_token) {
         console.warn(JSON.stringify({ level: 'warn', service: 'vine-accounts-api', event: 'gmail_oauth_token_exchange_failed', status: tokenResponse.status, code: String(tokens?.error || 'TOKEN_EXCHANGE_FAILED').slice(0, 80) }));
-        return safePage(res, 502, 'Google could not finish the connection', 'Check that the client ID, client secret, and redirect URI in Render exactly match the OAuth client in Google Cloud, then try again.');
+        return safePage(res, 502, 'Google could not finish the connection', 'Check that the client ID, client secret, and redirect URI configured for the Cloudflare Accounts Worker exactly match the OAuth client in Google Cloud, then try again.');
       }
       const profileResponse = await fetchGoogle(GOOGLE_USERINFO_ENDPOINT, { headers: { Authorization: `Bearer ${tokens.access_token}` } });
       let profile = null;
@@ -110,8 +124,8 @@ export function registerGoogleMailOAuthRoutes(app) {
         return safePage(res, 409, 'Google did not issue a refresh token', 'Remove the Vine Email Service app from your Google Account security connections, then open the Vine connection link again. Google must grant offline access for automatic sending.');
       }
       const tokenValue = escapeVineHtml(tokens.refresh_token);
-      const body = `<p>Google verified <strong>${escapeVineHtml(expectedSender)}</strong>. Copy the token below and save it as <code>GOOGLE_OAUTH_REFRESH_TOKEN</code> in Render for the Accounts API and Operations API. The token is shown only on this page; do not paste it into chat or GitHub.</p><textarea id="refreshToken" readonly>${tokenValue}</textarea><p><button type="button" id="copyToken">Copy refresh token</button> <span id="copyStatus" aria-live="polite"></span></p><script>document.getElementById('copyToken').addEventListener('click',async()=>{const field=document.getElementById('refreshToken');try{await navigator.clipboard.writeText(field.value);document.getElementById('copyStatus').textContent='Copied. Paste it into Render now.'}catch{field.focus();field.select();document.getElementById('copyStatus').textContent='Select and copy the token manually.'}})</script><p class="notice">After adding the variable in Render, remove it from clipboard history if your device offers that option. Never share the token.</p>`;
-      return safePage(res, 200, 'Gmail connected successfully', 'Vine is authorised to send email through the intended Gmail account. One final Render environment variable is needed to persist the connection.', body);
+      const body = `<p>Google verified <strong>${escapeVineHtml(expectedSender)}</strong>. Copy the token below and save it as <code>GOOGLE_OAUTH_REFRESH_TOKEN</code> in the Cloudflare dashboard for both the Accounts and Operations Workers. The token is shown only on this page; do not paste it into chat or GitHub.</p><textarea id="refreshToken" readonly>${tokenValue}</textarea><p><button type="button" id="copyToken">Copy refresh token</button> <span id="copyStatus" aria-live="polite"></span></p><script>document.getElementById('copyToken').addEventListener('click',async()=>{const field=document.getElementById('refreshToken');try{await navigator.clipboard.writeText(field.value);document.getElementById('copyStatus').textContent='Copied. Paste it into Cloudflare Worker secrets now.'}catch{field.focus();field.select();document.getElementById('copyStatus').textContent='Select and copy the token manually.'}})</script><p class="notice">After adding the secret in Cloudflare, remove it from clipboard history if your device offers that option. Never share the token.</p>`;
+      return safePage(res, 200, 'Gmail connected successfully', 'Vine is authorised to send email through the intended Gmail account. Save the refresh token in Cloudflare Worker secrets to persist the connection.', body);
     } catch (error) {
       console.warn(JSON.stringify({ level: 'warn', service: 'vine-accounts-api', event: 'gmail_oauth_callback_failed', message: String(error?.message || 'OAUTH_CALLBACK_FAILED').slice(0, 120) }));
       return safePage(res, 502, 'Gmail connection failed', error?.message || 'Try starting the Google connection again.');
