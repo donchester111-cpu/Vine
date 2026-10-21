@@ -11,14 +11,6 @@
   "observability": {
     "enabled": true
   },
-  "vars": {
-    "NODE_ENV": "production",
-    "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
-    "PRODUCTS_SUPABASE_URL": "https://xiehbdaaioifjcbnvpqf.supabase.co",
-    "ORDERS_SUPABASE_URL": "https://ybwdecxsbveiobfvwkvr.supabase.co",
-    "OPERATIONS_SUPABASE_URL": "https://sqtntfnbjtguqddvvsly.supabase.co",
-    "CHECKOUT_ENABLED": "true"
-  },
   "triggers": {
     "crons": [
       "* * * * *"
