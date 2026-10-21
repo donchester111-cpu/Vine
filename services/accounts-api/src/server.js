@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
-import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { applySecurity, finishApp, sendHealth } from '@vine/shared/app';
+import { applySecurity, createRateLimiter, finishApp, sendHealth } from '@vine/shared/app';
 import { createAuthContext } from '@vine/shared/db';
 import { createOwnerSessionToken, requireAuth } from '@vine/shared/auth';
 import { asyncRoute, HttpError } from '@vine/shared/errors';
@@ -17,7 +16,7 @@ const app = express();
 app.set('trust proxy', 1);
 applySecurity(app, { requestLimit: 120 });
 app.use(express.json({ limit: '1mb' }));
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false });
+const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false });
 const auth = requireAuth(authClient);
 
 app.get('/health', sendHealth);
