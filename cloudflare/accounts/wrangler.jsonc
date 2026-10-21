@@ -9,13 +9,5 @@
   ],
   "observability": {
     "enabled": true
-  },
-  "vars": {
-    "NODE_ENV": "production",
-    "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
-    "VINE_OWNER_EMAIL": "donchester111@gmail.com",
-    "VINE_STAFF_INVITE_REDIRECT_URL": "https://vinestore.com.ng/vineger.html",
-    "GMAIL_SENDER_EMAIL": "vinestore1official@gmail.com",
-    "GOOGLE_OAUTH_REDIRECT_URI": "https://vine-fnoh.onrender.com/api/v1/email/google/callback"
   }
 }
