@@ -157,7 +157,7 @@ body{background:radial-gradient(ellipse at 85% 0%,rgba(16,165,102,.065),transpar
 <script>
 (() => {
 'use strict';
-const CONFIG={accounts:'https://vine-fnoh.onrender.com',store:'https://vine-store-api.onrender.com',operations:'https://vine-operations-api.onrender.com'};
+const CONFIG={accounts:'https://accounts-api.donchester111.workers.dev',store:'https://store-api.donchester111.workers.dev',operations:'https://operations-api.donchester111.workers.dev'};
 const SESSION_KEY='vine_session_v1';
 let session=null,staffContext=null,currentPage='dashboard',orders=[],products=[],categories=[],suppliers=[],analytics=null,notifications=[],productQuestions=[],toastTimer,productPage=1,productLimit=50,productTotal=0,productTotalPages=1;window.vineDeliveryRows=[];
 const PAGE_ACCESS={dashboard:[],products:['products.view','products.manage'],questions:['products.manage'],orders:['orders.view','orders.manage'],suppliers:['suppliers.view','suppliers.manage'],fulfilment:['deliveries.view','deliveries.manage'],analytics:['analytics.view'],notifications:['notifications.view','notifications.manage']};
