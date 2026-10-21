@@ -9,16 +9,5 @@
   ],
   "observability": {
     "enabled": true
-  },
-  "vars": {
-    "NODE_ENV": "production",
-    "AUTH_SUPABASE_URL": "https://jktuwbgocpixtelfxzwq.supabase.co",
-    "VINE_OWNER_EMAIL": "donchester111@gmail.com",
-    "PRODUCTS_SUPABASE_URL": "https://xiehbdaaioifjcbnvpqf.supabase.co",
-    "VINE_PRODUCT_IMAGES_BUCKET": "vine-product-images",
-    "VINE_STOREFRONT_URL": "https://vinestore.com.ng",
-    "ORDERS_SUPABASE_URL": "https://ybwdecxsbveiobfvwkvr.supabase.co",
-    "CHECKOUT_ENABLED": "true",
-    "DELIVERY_FEE_KOBO": "0"
   }
 }
