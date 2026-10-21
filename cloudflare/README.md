@@ -4,13 +4,15 @@ This version removes Cloudflare Containers and Docker deployment. Each API runs 
 
 ## Workers and deployment settings
 
-Create/deploy three separate Workers from the same GitHub repository. In Cloudflare Workers Builds, set the **Root directory to the repository root** (leave it blank if the dashboard treats blank as root), because Vine uses npm workspaces and shared code under `packages/shared`.
+Create/deploy three separate Workers from the same GitHub repository. For **each** Worker, set the Workers Builds **Root directory to the repository root** (the folder containing the top-level `package.json`, `packages/`, and `services/`). Do not set it to `cloudflare/accounts`, `cloudflare/store`, or `cloudflare/operations`: the app dependencies and npm workspace package `@vine/shared` live at repository root.
 
-Use these individual build/deploy commands:
+In each Worker build's **Deploy command**, run the matching command below. These commands first install the root npm workspace dependencies, then deploy using the correct Wrangler config:
 
-- Accounts: `npx wrangler deploy --config cloudflare/accounts/wrangler.jsonc`
-- Store: `npx wrangler deploy --config cloudflare/store/wrangler.jsonc`
-- Operations: `npx wrangler deploy --config cloudflare/operations/wrangler.jsonc`
+- Accounts: `npm install && npx wrangler deploy --config cloudflare/accounts/wrangler.jsonc`
+- Store: `npm install && npx wrangler deploy --config cloudflare/store/wrangler.jsonc`
+- Operations: `npm install && npx wrangler deploy --config cloudflare/operations/wrangler.jsonc`
+
+Do not use just `npx wrangler deploy`, because it may select the wrong default config. The root directory and explicit config path are both required for this monorepo.
 
 The Worker names in the configs are `accounts-api`, `store-api`, and `operations-api`. If the dashboard-created Worker names differ, either rename the dashboard Worker or change the corresponding `name` field to exactly match it.
 
