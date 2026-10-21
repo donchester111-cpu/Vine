@@ -1,19 +1,12 @@
-# Vine Cloudflare migration audit — 2026-10-20
+# Vine Cloudflare migration audit — free Workers revision
 
-## Current source state
+The current Cloudflare deployment files use standard Workers, not Cloudflare Containers. The existing Express API source and shared Supabase business logic are retained. Cloudflare's `cloudflare:node` `httpServerHandler` adapts the existing Node HTTP server to Workers. Operations queue/reconciliation work is invoked by a five-minute Cron Trigger rather than process-lifetime timers.
 
-- Three Node.js 22-compatible Express APIs in a single npm-workspaces monorepo.
-- Existing runtime port is `process.env.PORT || 10000`; APIs bind to `0.0.0.0` and expose `/health` and `/ready`.
-- Four separate Supabase projects are used; they remain external and unchanged.
-- Operations API starts its notification queue polling every 30 seconds when email delivery is configured and runs delivery reconciliation after startup. Queue records are persisted in Supabase.
-- Frontend HTML and OAuth callback settings contain Render URLs that require a deliberate post-deploy cutover.
-- The Cloudflare Store API staging configuration sets `CHECKOUT_ENABLED=true` at the user's request. The application still enforces its existing Supabase owner-setting and per-payment-method gates; those must be checked independently before real transactions.
+Checkout remains enabled in the Store Worker configuration (`CHECKOUT_ENABLED=true`); this is an API gate, not proof that live payment credentials, Supabase settings, or payment webhooks are configured correctly.
 
-## Baseline validation
+Before production cutover, configure all secrets in Cloudflare, verify each `/health` and `/ready` endpoint, test login and checkout, verify Paystack callback/webhook URLs, and update frontend API URLs and Google OAuth redirects. Do not delete Render until the Cloudflare deployments pass end-to-end tests.
 
-- `node --test tests/*.test.js`: 13 tests passed.
-- `npm run check`: passed.
 
-## Migration boundary
+## Build troubleshooting update (2026-10-21)
 
-The Cloudflare files are new deployment wrappers and Dockerfiles. Existing application routes and business logic are unchanged. New Cloudflare endpoints must be tested before frontend URLs and OAuth callback settings are switched.
+If Wrangler reports unresolved `express`, `zod`, or `@vine/shared/*` imports, the build is not installing the root npm workspace dependencies or is using a service subdirectory as its root. Set the Workers Builds root directory to the repository root and use `npm install && npx wrangler deploy --config cloudflare/<service>/wrangler.jsonc`. This is a build configuration issue; do not delete imports or rewrite service logic to hide it.
