@@ -1,14 +1,39 @@
 import crypto from 'node:crypto';
 import helmet from 'helmet';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { errorHandler, notFound } from './errors.js';
 import { getAllowedOrigins } from './db.js';
+
+/**
+ * Build an IP key that works behind Cloudflare's Workers HTTP adapter.
+ * Express req.ip can be undefined in this runtime, so prefer the edge-provided
+ * CF-Connecting-IP header and normalize IPv6 addresses to a /56 subnet. When
+ * running outside Cloudflare, fall back to Express's req.ip. If neither exists,
+ * use one shared fail-closed bucket rather than allowing every request a fresh key.
+ */
+export function createRateLimiter(options = {}) {
+  return rateLimit({
+    ...options,
+    keyGenerator(req) {
+      const headerValue = req.get?.('cf-connecting-ip') ?? req.headers?.['cf-connecting-ip'];
+      const cloudflareIp = typeof headerValue === 'string' ? headerValue.trim() : '';
+      if (cloudflareIp) return ipKeyGenerator(cloudflareIp, 56);
+
+      const requestIp = req.ip;
+      if (typeof requestIp === 'string' && requestIp.trim()) {
+        return ipKeyGenerator(requestIp.trim(), 56);
+      }
+
+      return 'vine:client-ip-unavailable';
+    }
+  });
+}
 
 export function applySecurity(app, options = {}) {
   const allowedOrigins = options.allowedOrigins || getAllowedOrigins();
   app.disable('x-powered-by');
-  // Render terminates TLS in front of the app; trust its single proxy hop so IP-based rate limits work.
+  // Keep proxy support for non-Cloudflare deployments; createRateLimiter prefers CF-Connecting-IP on Workers.
   app.set('trust proxy', 1);
   app.use((req, res, next) => {
     req.id = req.headers['x-request-id']?.toString().slice(0, 100) || crypto.randomUUID();
@@ -27,7 +52,7 @@ export function applySecurity(app, options = {}) {
     credentials: false,
     maxAge: 600
   }));
-  app.use(rateLimit({ windowMs: 60_000, limit: options.requestLimit || 120, standardHeaders: 'draft-8', legacyHeaders: false }));
+  app.use(createRateLimiter({ windowMs: 60_000, limit: options.requestLimit || 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 }
 
 export function finishApp(app) {
