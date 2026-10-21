@@ -16,7 +16,7 @@ Do not rely on an implicit default Wrangler config. Keep the root workspace depe
 
 ## Environment variables and secrets
 
-The three Wrangler config files intentionally contain **no `vars` block and no secret values**. Keep the values you already configured in Cloudflare Dashboard → Worker → Settings → Variables and Secrets. The project source is designed to read those existing bindings through `process.env`; all three Worker configs explicitly enable `nodejs_compat_populate_process_env`.
+The three Wrangler config files intentionally contain **no `vars` block and no secret values**. They now set `keep_vars: true` so plain-text variables configured in the Cloudflare dashboard are preserved on subsequent Wrangler deployments. Cloudflare secrets are also preserved across deployments. Keep values in Cloudflare Dashboard → Worker → Settings → Variables and Secrets. The project source is designed to read those bindings through `process.env`; all three Worker configs explicitly enable `nodejs_compat_populate_process_env`.
 
 Do not copy secrets into Wrangler files, frontend HTML, GitHub, or this ZIP. If a Worker returns a configuration error, inspect its existing dashboard bindings rather than creating values in source files. See the matching `SECRETS_TO_CONFIGURE.md` file for variable names only.
 
