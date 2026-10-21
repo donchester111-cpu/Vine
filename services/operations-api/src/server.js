@@ -577,7 +577,7 @@ app.post('/api/v1/payments/initialize', auth, asyncRoute(async (req, res) => {
   if (payment.provider === 'bank_transfer' && paymentSettings.bankTransferEnabled !== true) throw new HttpError(409, 'PAYMENT_METHOD_DISABLED', 'Bank transfer is currently disabled by the store owner.');
 
   if (payment.provider === 'bank_transfer') {
-    // Owner-entered receiving details are safe public instructions; Render env values take precedence.
+    // Owner-entered receiving details are safe public instructions; Cloudflare Worker environment values take precedence.
     const bankName = String(process.env.BANK_TRANSFER_BANK_NAME || paymentSettings.bankName || '').trim();
     const accountName = String(process.env.BANK_TRANSFER_ACCOUNT_NAME || paymentSettings.accountName || '').trim();
     const accountNumber = String(process.env.BANK_TRANSFER_ACCOUNT_NUMBER || paymentSettings.accountNumber || '').trim();
