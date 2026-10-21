@@ -763,7 +763,7 @@ app.post('/api/v1/checkout', auth, asyncRoute(async (req, res) => {
   const commerceSettings = checkoutSettings.commerce || {};
   const shippingSettings = checkoutSettings.shipping || {};
   const paymentSettings = checkoutSettings.payments || {};
-  if (commerceSettings.checkoutEnabled !== true) throw new HttpError(503, 'CHECKOUT_NOT_ENABLED', 'Checkout is disabled in Vine store settings. Enable the store setting and confirm the Render safety gate before opening checkout.');
+  if (commerceSettings.checkoutEnabled !== true) throw new HttpError(503, 'CHECKOUT_NOT_ENABLED', 'Checkout is disabled in Vine store settings. Enable the store setting and confirm the Cloudflare Worker safety gate before opening checkout.');
   const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
   if (idempotencyKey.length < 8 || idempotencyKey.length > 120) throw new HttpError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'A valid Idempotency-Key header is required to prevent duplicate orders.');
   const input = checkoutSchema.parse(req.body);
