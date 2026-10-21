@@ -1,43 +1,41 @@
-# Vine — Cloudflare Workers (free-plan deployment)
+# Vine — Cloudflare Workers deployment
 
-This version removes Cloudflare Containers and Docker deployment. Each API runs as a standard Cloudflare Worker using Cloudflare's Node.js HTTP server adapter for the existing Express application. Supabase remains the database, and the Store Worker keeps `CHECKOUT_ENABLED` set to `true`.
+Vine runs three separate Cloudflare Workers and continues to use Supabase for its data stores. The current frontend files already point to the Cloudflare API URLs.
 
-## Workers and deployment settings
+## Build and deploy
 
-Create/deploy three separate Workers from the same GitHub repository. For **each** Worker, set the Workers Builds **Root directory to the repository root** (the folder containing the top-level `package.json`, `packages/`, and `services/`). Do not set it to `cloudflare/accounts`, `cloudflare/store`, or `cloudflare/operations`: the app dependencies and npm workspace package `@vine/shared` live at repository root.
+For each Worker, configure the Workers Build root directory as the repository root (the folder containing `package.json`, `packages/`, and `services/`). Do not set the build root to a `cloudflare/*` subfolder because the shared `@vine/shared` package is a root workspace dependency.
 
-In each Worker build's **Deploy command**, run the matching command below. These commands first install the root npm workspace dependencies, then deploy using the correct Wrangler config:
+Use the explicit Wrangler config for the Worker you are deploying:
 
-- Accounts: `npm install && npx wrangler deploy --config cloudflare/accounts/wrangler.jsonc`
-- Store: `npm install && npx wrangler deploy --config cloudflare/store/wrangler.jsonc`
-- Operations: `npm install && npx wrangler deploy --config cloudflare/operations/wrangler.jsonc`
+- Accounts: `npx wrangler deploy --config cloudflare/accounts/wrangler.jsonc`
+- Store: `npx wrangler deploy --config cloudflare/store/wrangler.jsonc`
+- Operations: `npx wrangler deploy --config cloudflare/operations/wrangler.jsonc`
 
-Do not use just `npx wrangler deploy`, because it may select the wrong default config. The root directory and explicit config path are both required for this monorepo.
+Do not rely on an implicit default Wrangler config. Keep the root workspace dependency install/build setup that is already working in Cloudflare; do not add a second package installation step if the configured build already installs workspace dependencies.
 
-The Worker names in the configs are `accounts-api`, `store-api`, and `operations-api`. If the dashboard-created Worker names differ, either rename the dashboard Worker or change the corresponding `name` field to exactly match it.
+## Environment variables and secrets
 
-## Required secrets
+The three Wrangler config files intentionally contain **no `vars` block and no secret values**. Keep the values you already configured in Cloudflare Dashboard → Worker → Settings → Variables and Secrets. The project source is designed to read those existing bindings through `process.env`; all three Worker configs explicitly enable `nodejs_compat_populate_process_env`.
 
-Configure the existing secrets in each Worker using the Cloudflare dashboard's **Settings → Variables and Secrets**. Use the matching `SECRETS_TO_CONFIGURE.md` file in each service folder. Never commit secrets or paste them into chat. Existing public variables from the prior staging configuration have been retained.
-
-Keep the exact production values for Supabase service-role keys, owner identity/session credentials, payment keys, email credentials, and `ALLOWED_ORIGINS`. Set all required variables before testing `/ready`.
+Do not copy secrets into Wrangler files, frontend HTML, GitHub, or this ZIP. If a Worker returns a configuration error, inspect its existing dashboard bindings rather than creating values in source files. See the matching `SECRETS_TO_CONFIGURE.md` file for variable names only.
 
 ## Checkout
 
-`cloudflare/store/wrangler.jsonc` keeps `CHECKOUT_ENABLED` set to `true`. This only enables the API's environment gate. Checkout still depends on the existing Supabase commerce settings, payment method configuration, Paystack credentials/webhook setup, inventory functions, and order database settings. Test with a non-live/small controlled transaction before switching production traffic.
+`CHECKOUT_ENABLED` is read from the Store Worker environment configured in the Cloudflare dashboard; it is not hard-coded in the Wrangler file. Checkout also requires the database checkout setting, enabled payment method, valid provider configuration/webhook, inventory functions, and order database settings. Verify using a controlled test before taking production orders.
 
-## Operations background tasks
+## Operations schedule
 
-The Operations Worker uses a Cloudflare Cron Trigger every five minutes to run the notification queue and delivery/staff reconciliation. This replaces process-lifetime timers, which are not a reliable background-job mechanism on Workers. The job logic remains in the existing Operations API source.
+The Operations Worker cron trigger is configured to run every five minutes (`*/5 * * * *`) for notification processing and delivery/staff reconciliation. This replaces process-lifetime timers, which are not reliable background-job mechanisms on Workers.
 
-## Verification and cutover
+## Google OAuth callback
 
-1. Deploy Accounts, then test `/health` and `/ready`.
-2. Deploy Store, then test `/health`, `/ready`, product/category endpoints, and checkout in a controlled test.
-3. Deploy Operations, then test `/health`, `/ready`, payment status and delivery routes. Confirm the cron trigger appears under the Worker settings.
-4. Update frontend API base URLs and the Google OAuth callback only after Cloudflare gives you the final Worker URLs. Update the matching Google OAuth authorized redirect URI too.
-5. Keep the old Render deployment available until all tests pass. Do not switch live traffic based only on a successful build.
+The fallback callback is `https://accounts-api.donchester111.workers.dev/api/v1/email/google/callback`. The existing `GOOGLE_OAUTH_REDIRECT_URI` dashboard setting is still respected unless it contains a legacy `onrender.com` URL; that legacy URL is ignored in favor of the Cloudflare callback. Make sure the matching callback is also registered with the Google OAuth client. No new environment variable is introduced by this package.
 
-## Free-plan notes
+## Verification
 
-This uses ordinary Workers and does not declare Containers or Durable Objects. Usage is still subject to Cloudflare's current Workers Free plan limits. The Workers Free plan is not a guarantee of unlimited traffic or uninterrupted execution.
+1. Deploy Accounts and check `/health` and `/ready`.
+2. Deploy Store and check `/health`, `/ready`, product/category endpoints, and checkout gates.
+3. Deploy Operations and check `/health`, `/ready`, payment status, and delivery routes. Confirm the five-minute cron trigger is present in Worker settings.
+4. Test the Vineowner and Vineger portals with a real authorized account. If a request still fails, use the failed request's status and the corresponding Worker log rather than assuming a successful `/health` request proves the portal call succeeds.
+5. Keep a prior deployment available until authenticated owner, staff, storefront, and controlled checkout checks pass.
