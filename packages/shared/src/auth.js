@@ -73,7 +73,7 @@ export function requireAuth(authClient) {
         const ownerAdminPrefixes = [
           '/api/v1/admin/products', '/api/v1/admin/categories', '/api/v1/admin/suppliers', '/api/v1/admin/integration-status',
           '/api/v1/admin/supplier-products', '/api/v1/admin/orders', '/api/v1/admin/payments', '/api/v1/admin/deliveries',
-          '/api/v1/admin/analytics/', '/api/v1/admin/notifications', '/api/v1/admin/questions',
+          '/api/v1/admin/analytics/', '/api/v1/admin/notifications', '/api/v1/admin/payment-review-requests', '/api/v1/admin/questions',
           '/api/v1/admin/product-images'
         ];
         const allowedOwnerPath = req.path.startsWith('/api/v1/owner/') ||
