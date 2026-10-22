@@ -115,6 +115,71 @@ async function enqueueOrderNotice(order, statusKey) {
   if (error) console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, message: 'Notification job could not be queued', code: error.code }));
 }
 
+async function getPaymentReviewRecipients() {
+  const recipients = new Set();
+  const add = value => {
+    const email = String(value || '').trim().toLowerCase();
+    if (/^\S+@\S+\.\S+$/.test(email)) recipients.add(email);
+  };
+  add(process.env.VINE_OWNER_EMAIL || 'donchester111@gmail.com');
+  add(process.env.VINE_SUPPORT_EMAIL || 'vinestore1official@gmail.com');
+
+  const [{ data: memberships, error: membershipsError }, { data: legacyRoles, error: legacyRolesError }] = await Promise.all([
+    accountsAdmin.from('staff_memberships').select('user_id,status').eq('status', 'active'),
+    accountsAdmin.from('admin_roles').select('user_id,role').in('role', ['owner', 'admin', 'operations'])
+  ]);
+  if (membershipsError) throw new HttpError(503, 'PAYMENT_REVIEW_STAFF_UNAVAILABLE', 'The payment-review team could not be loaded.');
+  if (legacyRolesError) console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_legacy_roles_unavailable', code: legacyRolesError.code || 'DB_ERROR' }));
+  const userIds = [...new Set([...(memberships || []).map(row => row.user_id), ...(legacyRoles || []).map(row => row.user_id)].filter(Boolean))];
+  for (const userId of userIds) {
+    try {
+      const { data: authData, error: userError } = await accountsAdmin.auth.admin.getUserById(userId);
+      const user = authData?.user;
+      if (userError || !user?.email) continue;
+      const access = await resolveStaffAccess(accountsAdmin, user);
+      if (access.permissions.includes('*') || access.permissions.includes('payments.manage') || access.permissions.includes('payments.view')) add(user.email);
+    } catch (error) {
+      console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_recipient_skipped', code: safeNotificationErrorCode(error) }));
+    }
+  }
+  return [...recipients];
+}
+
+async function enqueuePaymentReviewNotices(order, reviewRequest) {
+  let queued = 0;
+  try {
+    const recipients = await getPaymentReviewRecipients();
+    const timestamp = new Date().toISOString();
+    for (const recipient of recipients) {
+      const recipientKey = crypto.createHash('sha256').update(recipient).digest('hex').slice(0, 12);
+      const { error } = await operationsDb.from('notification_jobs').upsert({
+        dedupe_key: `payment-review:${reviewRequest.id}:${recipientKey}`,
+        order_id: order.id,
+        channel: 'email',
+        template_key: 'staff.payment_review_requested',
+        recipient_ref: recipient,
+        payload: {
+          requestId: reviewRequest.id,
+          orderNumber: order.order_number,
+          customerEmail: order.email,
+          paymentReference: reviewRequest.payment_reference || '',
+          amountKobo: Number(reviewRequest.amount_kobo || order.total_kobo || 0),
+          currency: reviewRequest.currency || order.currency || 'NGN',
+          customerNote: reviewRequest.customer_note || ''
+        },
+        status: 'pending', available_at: timestamp
+      }, { onConflict: 'dedupe_key', ignoreDuplicates: true });
+      if (error) console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_notice_enqueue_failed', requestId: reviewRequest.id, code: error.code || 'DB_ERROR' }));
+      else queued++;
+    }
+    if (!recipients.length) console.warn(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_no_recipients', requestId: reviewRequest.id }));
+  } catch (error) {
+    // The request itself remains visible in the payment-review portal even if email is unavailable.
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_notifications_unavailable', requestId: reviewRequest.id, code: safeNotificationErrorCode(error) }));
+  }
+  return queued;
+}
+
 function safeNotificationErrorCode(error) {
   const raw = String(error?.code || error?.name || 'NOTIFICATION_DELIVERY_FAILED').toUpperCase();
   return raw.replace(/[^A-Z0-9_]/g, '_').slice(0, 80) || 'NOTIFICATION_DELIVERY_FAILED';
@@ -157,6 +222,12 @@ async function deliverNotificationJob(job) {
       subject = `Vine order ${order.order_number} is being prepared`;
       heading = 'Your order is being prepared';
       message = `Order ${order.order_number} is being prepared for delivery. We will share further updates as its delivery progresses.`;
+    } else if (claimed.template_key === 'staff.payment_review_requested') {
+      const details = claimed.payload && typeof claimed.payload === 'object' ? claimed.payload : {};
+      const amountNgn = (Number(details.amountKobo || order.total_kobo || 0) / 100).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      subject = `Payment check requested for Vine order ${order.order_number}`;
+      heading = 'Customer payment check needs review';
+      message = `A customer reports a payment confirmation problem for order ${order.order_number}. Order payment status is currently ${order.payment_status}. Amount: NGN ${amountNgn}. Customer: ${details.customerEmail || order.email || 'not available'}. Paystack reference: ${details.paymentReference || 'not available'}. Customer note: ${String(details.customerNote || 'No additional note').slice(0, 500)}. Open the Vineowner portal and use “Verify with Paystack”. Do not mark the order paid based only on a screenshot or customer report.`;
     } else {
       throw new HttpError(422, 'NOTIFICATION_TEMPLATE_NOT_CONFIGURED', 'This message template is not configured for delivery.');
     }
@@ -467,12 +538,49 @@ async function markOrderPaymentReview(payment, order, reason, eventId = null) {
   return { needsReview: true };
 }
 
+async function verifyPaystackForPaymentReview(payment, order, actorId = null, requestRow = null) {
+  const now = new Date().toISOString();
+  if (order.payment_status === 'paid' || payment.status === 'paid') {
+    if (order.payment_status !== 'paid') await updateOrderAndPaymentPaid(payment, order, payment.paid_at || now);
+    if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_paid', staff_note: 'Order was already recorded as paid.', reviewed_by: actorId, resolved_at: now, updated_at: now }).eq('id', requestRow.id);
+    return { status: 'verified_paid', paymentStatus: 'paid', orderNumber: order.order_number, note: 'The order is already recorded as paid.' };
+  }
+  if (payment.provider !== 'paystack') return { status: 'pending', paymentStatus: order.payment_status, note: 'This order does not have a Paystack payment record. Staff must review it using the original payment method.' };
+  if (!payment.reference || Number(payment.amount_kobo) !== Number(order.total_kobo) || payment.currency !== 'NGN') {
+    await markOrderPaymentReview(payment, order, 'payment_review_record_mismatch');
+    return { status: 'pending', paymentStatus: 'review_required', note: 'Payment record details do not match the order. The order remains blocked pending reconciliation.' };
+  }
+  let verified;
+  try {
+    verified = await paystackRequest(`/transaction/verify/${encodeURIComponent(payment.reference)}`);
+  } catch (error) {
+    return { status: 'pending', paymentStatus: order.payment_status, note: 'Paystack could not confirm the payment during this check. The request remains queued for staff review.', providerErrorCode: safeNotificationErrorCode(error) };
+  }
+  if (verified.status !== 'success') {
+    return { status: 'pending', paymentStatus: order.payment_status, note: `Paystack currently reports this transaction as ${String(verified.status || 'unconfirmed')}. The order remains unpaid until provider verification succeeds.` };
+  }
+  if (verified.reference !== payment.reference || Number(verified.amount) !== Number(payment.amount_kobo) || verified.currency !== 'NGN') {
+    await markOrderPaymentReview(payment, order, 'paystack_review_verification_mismatch');
+    return { status: 'pending', paymentStatus: 'review_required', note: 'Paystack returned transaction details that do not match this order. Manual reconciliation is required; the order was not approved.' };
+  }
+  const inventoryResult = await productsDb.rpc('commit_vine_inventory', { p_order_id: order.id });
+  if (inventoryResult.error || !['committed', 'already_committed'].includes(inventoryResult.data)) {
+    await markOrderPaymentReview(payment, order, 'inventory_reconciliation_after_customer_payment_check');
+    return { status: 'pending', paymentStatus: 'review_required', note: 'Paystack confirms payment, but stock allocation needs staff reconciliation before this order can be approved.' };
+  }
+  const paidOrder = await updateOrderAndPaymentPaid(payment, order, verified.paid_at ? new Date(verified.paid_at).toISOString() : now);
+  await addAudit({ actorId, actorType: actorId ? 'admin' : 'customer', action: actorId ? 'payment.review_verified_by_staff' : 'payment.review_verified_by_customer_check', entityType: 'order', entityId: order.id, metadata: { requestId: requestRow?.id || null, paymentId: payment.id, provider: 'paystack' } });
+  if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_paid', staff_note: 'Verified directly against the Paystack transaction API; stock allocation committed.', reviewed_by: actorId, resolved_at: now, updated_at: now }).eq('id', requestRow.id);
+  return { status: 'verified_paid', paymentStatus: 'paid', orderNumber: paidOrder.order_number, note: 'Paystack confirmed the transaction. The order is now approved and delivery tracking will be available.' };
+}
+
 app.get('/health', sendHealth);
 app.get('/ready', asyncRoute(async (_req, res) => {
   const checks = await Promise.all([
     ordersDb.from('payments').select('id').limit(1),
     productsDb.from('products').select('id').limit(1),
-    operationsDb.from('daily_sales_summary').select('sales_date').limit(1)
+    operationsDb.from('daily_sales_summary').select('sales_date').limit(1),
+    operationsDb.from('payment_review_requests').select('id').limit(1)
   ]);
   if (checks.some(c => c.error)) throw new HttpError(503, 'DATABASE_UNAVAILABLE', 'One or more Vine operations databases are not ready.');
   res.json({ status: 'ready', service: process.env.SERVICE_NAME });
@@ -552,6 +660,53 @@ app.get('/api/v1/payments/status', auth, asyncRoute(async (req, res) => {
   res.json({ data: { orderId: order.id, orderNumber: order.order_number, orderStatus: order.status, paymentStatus: order.payment_status, providerStatus: payment.status, amountKobo: Number(payment.amount_kobo), currency: payment.currency, paidAt: payment.paid_at || order.paid_at || null, checkedAt: new Date().toISOString(), note: payment.status === 'paid' ? 'Payment confirmed.' : 'Vine is waiting for verified payment confirmation. Do not pay again while confirmation is pending.' } });
 }));
 
+app.post('/api/v1/me/payment-check-requests', auth, asyncRoute(async (req, res) => {
+  const input = z.object({ orderId: uuidSchema, note: optionalText(500) }).parse(req.body || {});
+  const order = await loadOrderForPayment(input.orderId);
+  if (order.customer_id !== req.user.id) throw new HttpError(404, 'ORDER_NOT_FOUND', 'That order was not found.');
+  if (order.payment_status === 'paid') return res.json({ data: { status: 'verified_paid', paymentStatus: 'paid', orderNumber: order.order_number, note: 'This order is already paid.' } });
+
+  const { data: paymentRows, error: paymentError } = await ordersDb.from('payments')
+    .select('id,order_id,provider,reference,amount_kobo,currency,status,paid_at,created_at')
+    .eq('order_id', order.id).order('created_at', { ascending: false }).limit(1);
+  if (paymentError) throw new HttpError(503, 'PAYMENT_LOOKUP_FAILED', 'Vine could not load the payment record. Please contact support.');
+  if (!paymentRows?.length) throw new HttpError(404, 'PAYMENT_NOT_FOUND', 'This order has no payment record to check. Contact Vine support with the order number.');
+  const payment = paymentRows[0];
+
+  const { data: existing, error: existingError } = await operationsDb.from('payment_review_requests')
+    .select('*').eq('order_id', order.id).eq('status', 'pending').maybeSingle();
+  if (existingError) throw new HttpError(503, 'PAYMENT_REVIEW_UNAVAILABLE', 'Vine could not load the payment-check request. Please retry.');
+  if (existing) return res.json({ data: { requestId: existing.id, status: 'pending', paymentStatus: order.payment_status, orderNumber: order.order_number, alreadyRequested: true, note: 'A payment-check request is already open. Please do not pay again while it is under review.' } });
+
+  const now = new Date().toISOString();
+  const { data: reviewRequest, error: insertError } = await operationsDb.from('payment_review_requests').insert({
+    order_id: order.id, order_number: order.order_number, customer_id: req.user.id,
+    customer_email: String(req.user.email || order.email || '').slice(0, 254),
+    payment_reference: String(payment.reference || '').slice(0, 120), amount_kobo: Number(payment.amount_kobo || order.total_kobo),
+    currency: String(payment.currency || order.currency || 'NGN'), customer_note: String(input.note || '').trim().slice(0, 500),
+    status: 'pending', created_at: now, updated_at: now
+  }).select('*').single();
+  if (insertError) {
+    if (insertError.code === '23505') {
+      const { data: raced } = await operationsDb.from('payment_review_requests').select('*').eq('order_id', order.id).eq('status', 'pending').maybeSingle();
+      if (raced) return res.json({ data: { requestId: raced.id, status: 'pending', paymentStatus: order.payment_status, orderNumber: order.order_number, alreadyRequested: true, note: 'A payment-check request is already open. Please do not pay again while it is under review.' } });
+    }
+    throw new HttpError(503, 'PAYMENT_REVIEW_SAVE_FAILED', 'Vine could not save your payment-check request. Please contact support before retrying.');
+  }
+  await addAudit({ actorId: req.user.id, actorType: 'customer', action: 'payment.review_request_created', entityType: 'order', entityId: order.id, requestId: req.id, metadata: { reviewRequestId: reviewRequest.id, provider: payment.provider } });
+
+  let checkResult = { status: 'pending', paymentStatus: order.payment_status, note: 'The request is saved for staff review.' };
+  try { checkResult = await verifyPaystackForPaymentReview(payment, order, null, reviewRequest); }
+  catch (error) { console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_instant_check_failed', requestId: reviewRequest.id, code: safeNotificationErrorCode(error) })); }
+
+  if (checkResult.status !== 'verified_paid') {
+    const emailNotificationsQueued = await enqueuePaymentReviewNotices(order, reviewRequest);
+    await operationsDb.from('payment_review_requests').update({ staff_note: String(checkResult.note || '').slice(0, 1000), updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'pending');
+    return res.status(202).json({ data: { requestId: reviewRequest.id, status: 'pending', paymentStatus: checkResult.paymentStatus || order.payment_status, orderNumber: order.order_number, emailNotificationsQueued, note: checkResult.note || 'Your request is saved. Vine staff will review it. Please do not pay again while it is pending.' } });
+  }
+  res.json({ data: { requestId: reviewRequest.id, status: 'verified_paid', paymentStatus: 'paid', orderNumber: checkResult.orderNumber || order.order_number, note: checkResult.note } });
+}));
+
 app.post('/api/v1/payments/initialize', auth, asyncRoute(async (req, res) => {
   const { orderId } = z.object({ orderId: uuidSchema }).parse(req.body);
   const order = await loadOrderForPayment(orderId);
@@ -610,6 +765,46 @@ app.get('/api/v1/admin/integration-status', auth, integrationsView, asyncRoute(a
     smsProviderConfigured: Boolean(String(process.env.SMS_PROVIDER || '').trim()),
     checkoutSafetyGate: String(process.env.CHECKOUT_ENABLED || '').toLowerCase() === 'true'
   } });
+}));
+
+app.get('/api/v1/admin/payment-review-requests', auth, paymentAdmin, asyncRoute(async (req, res) => {
+  const limit = clampInt(req.query.limit, 100, 1, 200);
+  const status = String(req.query.status || 'all').trim().toLowerCase();
+  if (!['all', 'pending', 'verified_paid', 'closed'].includes(status)) throw new HttpError(400, 'PAYMENT_REVIEW_STATUS_INVALID', 'Choose a valid payment review status.');
+  let query = operationsDb.from('payment_review_requests')
+    .select('id,order_id,order_number,customer_id,customer_email,payment_reference,amount_kobo,currency,customer_note,staff_note,status,created_at,updated_at,resolved_at,reviewed_by')
+    .order('created_at', { ascending: false }).limit(limit);
+  if (status !== 'all') query = query.eq('status', status);
+  const { data, error } = await query;
+  if (error) throw new HttpError(503, 'PAYMENT_REVIEW_UNAVAILABLE', 'Payment-check requests could not be loaded. Ensure the payment-review migration is applied.');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ data: (data || []).map(row => ({ ...row, amount_kobo: Number(row.amount_kobo) })) });
+}));
+
+app.post('/api/v1/admin/payment-review-requests/:id/verify', auth, paymentAdmin, asyncRoute(async (req, res) => {
+  const requestId = uuidSchema.parse(req.params.id);
+  const { note } = z.object({ note: optionalText(1000) }).parse(req.body || {});
+  const { data: reviewRequest, error: requestError } = await operationsDb.from('payment_review_requests')
+    .select('*').eq('id', requestId).maybeSingle();
+  if (requestError) throw new HttpError(503, 'PAYMENT_REVIEW_UNAVAILABLE', 'The selected payment-check request could not be loaded.');
+  if (!reviewRequest) throw new HttpError(404, 'PAYMENT_REVIEW_NOT_FOUND', 'That payment-check request was not found.');
+  if (reviewRequest.status === 'verified_paid') return res.json({ data: { requestId, status: 'verified_paid', paymentStatus: 'paid', orderNumber: reviewRequest.order_number, alreadyVerified: true } });
+  if (reviewRequest.status !== 'pending') throw new HttpError(409, 'PAYMENT_REVIEW_CLOSED', 'This payment-check request is no longer open.');
+
+  const order = await loadOrderForPayment(reviewRequest.order_id);
+  const { data: paymentRows, error: paymentError } = await ordersDb.from('payments')
+    .select('id,order_id,provider,reference,status,amount_kobo,currency,paid_at,created_at')
+    .eq('order_id', order.id).order('created_at', { ascending: false }).limit(1);
+  if (paymentError || !paymentRows?.length) throw new HttpError(503, 'PAYMENT_LOOKUP_FAILED', 'The linked payment could not be loaded.');
+  const result = await verifyPaystackForPaymentReview(paymentRows[0], order, req.user.id, reviewRequest);
+  const staffNote = [String(result.note || ''), String(note || '').trim()].filter(Boolean).join(' — ').slice(0, 1000);
+  if (result.status !== 'verified_paid') {
+    await operationsDb.from('payment_review_requests').update({ staff_note: staffNote, reviewed_by: req.user.id, updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'pending');
+    await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'payment.review_rechecked_unresolved', entityType: 'payment_review_request', entityId: reviewRequest.id, requestId: req.id, metadata: { orderId: order.id } });
+    return res.status(202).json({ data: { requestId, status: 'pending', paymentStatus: result.paymentStatus || order.payment_status, orderNumber: order.order_number, note: staffNote || 'Paystack did not confirm the transaction. The order has not been approved.' } });
+  }
+  if (note) await operationsDb.from('payment_review_requests').update({ staff_note: staffNote, reviewed_by: req.user.id, updated_at: new Date().toISOString() }).eq('id', reviewRequest.id);
+  res.json({ data: { requestId, status: 'verified_paid', paymentStatus: 'paid', orderNumber: result.orderNumber || order.order_number, note: result.note } });
 }));
 
 app.get('/api/v1/admin/payments', auth, paymentAdmin, asyncRoute(async (req, res) => {
