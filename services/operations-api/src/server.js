@@ -538,12 +538,33 @@ async function markOrderPaymentReview(payment, order, reason, eventId = null) {
   return { needsReview: true };
 }
 
+async function recordPaystackVerifiedAwaitingApproval(payment, order, timestamp) {
+  const { error: paymentError } = await ordersDb.from('payments').update({
+    status: 'paid', paid_at: timestamp, last_checked_at: timestamp, updated_at: timestamp
+  }).eq('id', payment.id);
+  if (paymentError) throw new HttpError(503, 'PAYMENT_UPDATE_FAILED', 'Paystack verified payment, but Vine could not save the verified payment record. Retry verification.');
+
+  const { data: updatedOrder, error: orderError } = await ordersDb.from('orders').update({
+    status: 'payment_review', payment_status: 'paid', paid_at: timestamp, updated_at: timestamp
+  }).eq('id', order.id).in('status', ['pending_payment', 'payment_review'])
+    .select('id,order_number,customer_id,email,status,payment_status,total_kobo,paid_at').maybeSingle();
+  if (orderError) throw new HttpError(503, 'ORDER_VERIFICATION_SAVE_FAILED', 'Payment is verified, but the order could not be held for owner approval. Retry from the payment-review queue.');
+  if (!updatedOrder) {
+    const latest = await loadOrderForPayment(order.id);
+    if (latest.payment_status === 'paid' && ['paid', 'processing', 'shipped', 'delivered'].includes(latest.status)) {
+      return { alreadyApproved: true, order: latest };
+    }
+    throw new HttpError(409, 'ORDER_NOT_APPROVABLE', 'Payment is verified, but this order is no longer in a state that can be held for owner approval. Reconcile the order before proceeding.');
+  }
+  return { alreadyApproved: false, order: updatedOrder };
+}
+
 async function verifyPaystackForPaymentReview(payment, order, actorId = null, requestRow = null) {
   const now = new Date().toISOString();
-  if (order.payment_status === 'paid' || payment.status === 'paid') {
-    if (order.payment_status !== 'paid') await updateOrderAndPaymentPaid(payment, order, payment.paid_at || now);
-    if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_paid', staff_note: 'Order was already recorded as paid.', reviewed_by: actorId, resolved_at: now, updated_at: now }).eq('id', requestRow.id);
-    return { status: 'verified_paid', paymentStatus: 'paid', orderNumber: order.order_number, note: 'The order is already recorded as paid.' };
+  const alreadyApproved = order.payment_status === 'paid' && ['paid', 'processing', 'shipped', 'delivered'].includes(order.status);
+  if (alreadyApproved) {
+    if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_paid', staff_note: 'Order was already verified and released for fulfilment.', reviewed_by: actorId, resolved_at: now, updated_at: now }).eq('id', requestRow.id);
+    return { status: 'verified_paid', paymentStatus: 'paid', orderNumber: order.order_number, note: 'This order has already been approved for fulfilment.' };
   }
   if (payment.provider !== 'paystack') return { status: 'pending', paymentStatus: order.payment_status, note: 'This order does not have a Paystack payment record. Staff must review it using the original payment method.' };
   if (!payment.reference || Number(payment.amount_kobo) !== Number(order.total_kobo) || payment.currency !== 'NGN') {
@@ -568,10 +589,15 @@ async function verifyPaystackForPaymentReview(payment, order, actorId = null, re
     await markOrderPaymentReview(payment, order, 'inventory_reconciliation_after_customer_payment_check');
     return { status: 'pending', paymentStatus: 'review_required', note: 'Paystack confirms payment, but stock allocation needs staff reconciliation before this order can be approved.' };
   }
-  const paidOrder = await updateOrderAndPaymentPaid(payment, order, verified.paid_at ? new Date(verified.paid_at).toISOString() : now);
-  await addAudit({ actorId, actorType: actorId ? 'admin' : 'customer', action: actorId ? 'payment.review_verified_by_staff' : 'payment.review_verified_by_customer_check', entityType: 'order', entityId: order.id, metadata: { requestId: requestRow?.id || null, paymentId: payment.id, provider: 'paystack' } });
-  if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_paid', staff_note: 'Verified directly against the Paystack transaction API; stock allocation committed.', reviewed_by: actorId, resolved_at: now, updated_at: now }).eq('id', requestRow.id);
-  return { status: 'verified_paid', paymentStatus: 'paid', orderNumber: paidOrder.order_number, note: 'Paystack confirmed the transaction. The order is now approved and delivery tracking will be available.' };
+  const verifiedAt = verified.paid_at ? new Date(verified.paid_at).toISOString() : now;
+  const result = await recordPaystackVerifiedAwaitingApproval(payment, order, verifiedAt);
+  if (result.alreadyApproved) {
+    if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_paid', staff_note: 'The order was already released for fulfilment.', reviewed_by: actorId, resolved_at: now, updated_at: now }).eq('id', requestRow.id);
+    return { status: 'verified_paid', paymentStatus: 'paid', orderNumber: result.order.order_number, note: 'The order was already approved for fulfilment.' };
+  }
+  await addAudit({ actorId, actorType: actorId ? 'admin' : 'customer', action: actorId ? 'payment.review_verified_awaiting_approval' : 'payment.review_customer_check_verified_awaiting_approval', entityType: 'order', entityId: order.id, metadata: { requestId: requestRow?.id || null, paymentId: payment.id, provider: 'paystack' } });
+  if (requestRow) await operationsDb.from('payment_review_requests').update({ status: 'verified_pending_approval', staff_note: 'Paystack confirmed the exact transaction and stock reservation was committed. Waiting for an authorized owner/staff approval.', reviewed_by: actorId, resolved_at: null, updated_at: now }).eq('id', requestRow.id);
+  return { status: 'verified_pending_approval', paymentStatus: 'paid', orderNumber: order.order_number, note: 'Paystack confirmed the transaction. The order is held for owner approval; use Approve order to release it for fulfilment and tracking.' };
 }
 
 app.get('/health', sendHealth);
@@ -699,6 +725,11 @@ app.post('/api/v1/me/payment-check-requests', auth, asyncRoute(async (req, res) 
   try { checkResult = await verifyPaystackForPaymentReview(payment, order, null, reviewRequest); }
   catch (error) { console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, event: 'payment_review_instant_check_failed', requestId: reviewRequest.id, code: safeNotificationErrorCode(error) })); }
 
+  if (checkResult.status === 'verified_pending_approval') {
+    const emailNotificationsQueued = await enqueuePaymentReviewNotices(order, reviewRequest);
+    await operationsDb.from('payment_review_requests').update({ staff_note: String(checkResult.note || '').slice(0, 1000), updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'verified_pending_approval');
+    return res.status(202).json({ data: { requestId: reviewRequest.id, status: 'verified_pending_approval', paymentStatus: 'paid', orderNumber: order.order_number, emailNotificationsQueued, note: checkResult.note || 'Paystack verified the payment. The order is waiting for owner approval.' } });
+  }
   if (checkResult.status !== 'verified_paid') {
     const emailNotificationsQueued = await enqueuePaymentReviewNotices(order, reviewRequest);
     await operationsDb.from('payment_review_requests').update({ staff_note: String(checkResult.note || '').slice(0, 1000), updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'pending');
@@ -770,7 +801,7 @@ app.get('/api/v1/admin/integration-status', auth, integrationsView, asyncRoute(a
 app.get('/api/v1/admin/payment-review-requests', auth, paymentAdmin, asyncRoute(async (req, res) => {
   const limit = clampInt(req.query.limit, 100, 1, 200);
   const status = String(req.query.status || 'all').trim().toLowerCase();
-  if (!['all', 'pending', 'verified_paid', 'closed'].includes(status)) throw new HttpError(400, 'PAYMENT_REVIEW_STATUS_INVALID', 'Choose a valid payment review status.');
+  if (!['all', 'pending', 'verified_pending_approval', 'verified_paid', 'closed'].includes(status)) throw new HttpError(400, 'PAYMENT_REVIEW_STATUS_INVALID', 'Choose a valid payment review status.');
   let query = operationsDb.from('payment_review_requests')
     .select('id,order_id,order_number,customer_id,customer_email,payment_reference,amount_kobo,currency,customer_note,staff_note,status,created_at,updated_at,resolved_at,reviewed_by')
     .order('created_at', { ascending: false }).limit(limit);
@@ -798,13 +829,90 @@ app.post('/api/v1/admin/payment-review-requests/:id/verify', auth, paymentAdmin,
   if (paymentError || !paymentRows?.length) throw new HttpError(503, 'PAYMENT_LOOKUP_FAILED', 'The linked payment could not be loaded.');
   const result = await verifyPaystackForPaymentReview(paymentRows[0], order, req.user.id, reviewRequest);
   const staffNote = [String(result.note || ''), String(note || '').trim()].filter(Boolean).join(' — ').slice(0, 1000);
+  if (result.status === 'verified_pending_approval') {
+    const { error: noteError } = await operationsDb.from('payment_review_requests').update({ staff_note: staffNote, reviewed_by: req.user.id, updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'verified_pending_approval');
+    if (noteError) throw new HttpError(503, 'PAYMENT_REVIEW_NOTE_SAVE_FAILED', 'Paystack verification succeeded, but the review note could not be saved. The order remains held for approval.');
+    await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'payment.review_verified_waiting_for_approval', entityType: 'payment_review_request', entityId: reviewRequest.id, requestId: req.id, metadata: { orderId: order.id } });
+    return res.status(202).json({ data: { requestId, status: 'verified_pending_approval', paymentStatus: 'paid', orderNumber: result.orderNumber || order.order_number, note: staffNote || 'Paystack verified this payment. Use Approve order to release it for fulfilment.' } });
+  }
   if (result.status !== 'verified_paid') {
-    await operationsDb.from('payment_review_requests').update({ staff_note: staffNote, reviewed_by: req.user.id, updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'pending');
+    const { error: noteError } = await operationsDb.from('payment_review_requests').update({ staff_note: staffNote, reviewed_by: req.user.id, updated_at: new Date().toISOString() }).eq('id', reviewRequest.id).eq('status', 'pending');
+    if (noteError) throw new HttpError(503, 'PAYMENT_REVIEW_NOTE_SAVE_FAILED', 'The payment result could not be saved to the review request. Refresh and retry.');
     await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'payment.review_rechecked_unresolved', entityType: 'payment_review_request', entityId: reviewRequest.id, requestId: req.id, metadata: { orderId: order.id } });
     return res.status(202).json({ data: { requestId, status: 'pending', paymentStatus: result.paymentStatus || order.payment_status, orderNumber: order.order_number, note: staffNote || 'Paystack did not confirm the transaction. The order has not been approved.' } });
   }
   if (note) await operationsDb.from('payment_review_requests').update({ staff_note: staffNote, reviewed_by: req.user.id, updated_at: new Date().toISOString() }).eq('id', reviewRequest.id);
   res.json({ data: { requestId, status: 'verified_paid', paymentStatus: 'paid', orderNumber: result.orderNumber || order.order_number, note: result.note } });
+}));
+
+app.post('/api/v1/admin/payment-review-requests/:id/approve', auth, paymentAdmin, asyncRoute(async (req, res) => {
+  const requestId = uuidSchema.parse(req.params.id);
+  const { note } = z.object({ note: optionalText(1000) }).parse(req.body || {});
+  const { data: reviewRequest, error: requestError } = await operationsDb.from('payment_review_requests')
+    .select('*').eq('id', requestId).maybeSingle();
+  if (requestError) throw new HttpError(503, 'PAYMENT_REVIEW_UNAVAILABLE', 'The selected payment-check request could not be loaded.');
+  if (!reviewRequest) throw new HttpError(404, 'PAYMENT_REVIEW_NOT_FOUND', 'That payment-check request was not found.');
+  if (reviewRequest.status === 'verified_paid') return res.json({ data: { requestId, status: 'verified_paid', orderNumber: reviewRequest.order_number, alreadyApproved: true, note: 'This request is already approved.' } });
+  if (reviewRequest.status !== 'verified_pending_approval') throw new HttpError(409, 'PAYMENT_NOT_READY_FOR_APPROVAL', 'Verify the transaction successfully with Paystack before approving the order.');
+
+  const order = await loadOrderForPayment(reviewRequest.order_id);
+  const { data: paymentRows, error: paymentError } = await ordersDb.from('payments')
+    .select('id,order_id,provider,reference,status,amount_kobo,currency,paid_at,created_at')
+    .eq('order_id', order.id).order('created_at', { ascending: false }).limit(1);
+  if (paymentError || !paymentRows?.length) throw new HttpError(503, 'PAYMENT_LOOKUP_FAILED', 'The linked payment could not be loaded.');
+  const payment = paymentRows[0];
+  const now = new Date().toISOString();
+  let approvedOrder = order;
+  const alreadyReleased = order.payment_status === 'paid' && ['paid', 'processing', 'shipped', 'delivered'].includes(order.status);
+
+  if (!alreadyReleased) {
+    if (order.status !== 'payment_review' || order.payment_status !== 'paid' || payment.status !== 'paid' || payment.provider !== 'paystack') {
+      throw new HttpError(409, 'PAYMENT_NOT_READY_FOR_APPROVAL', 'The order is not in the verified-payment hold state. Recheck the payment before approving.');
+    }
+    if (!payment.reference || Number(payment.amount_kobo) !== Number(order.total_kobo) || payment.currency !== 'NGN') {
+      throw new HttpError(409, 'PAYMENT_AMOUNT_MISMATCH', 'The stored transaction does not match the order amount and currency. Approval is blocked.');
+    }
+
+    // Recheck with Paystack at the moment of approval. A database status or screenshot
+    // alone is never enough to release the order.
+    const verified = await paystackRequest(`/transaction/verify/${encodeURIComponent(payment.reference)}`);
+    if (verified.status !== 'success' || verified.reference !== payment.reference || Number(verified.amount) !== Number(payment.amount_kobo) || Number(payment.amount_kobo) !== Number(order.total_kobo) || verified.currency !== 'NGN') {
+      await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'payment.review_approval_blocked', entityType: 'payment_review_request', entityId: reviewRequest.id, requestId: req.id, metadata: { orderId: order.id, reason: 'paystack_recheck_mismatch_or_not_successful' } });
+      throw new HttpError(409, 'PAYSTACK_APPROVAL_RECHECK_FAILED', 'Paystack did not reconfirm the exact successful transaction at approval time. The order remains on hold.');
+    }
+
+    const inventoryResult = await productsDb.rpc('commit_vine_inventory', { p_order_id: order.id });
+    if (inventoryResult.error || !['committed', 'already_committed'].includes(inventoryResult.data)) {
+      throw new HttpError(409, 'INVENTORY_RECONCILIATION_REQUIRED', 'Payment is confirmed, but stock allocation could not be reconciled. The order remains blocked until inventory is reviewed.');
+    }
+    const { data: changedOrder, error: orderUpdateError } = await ordersDb.from('orders').update({ status: 'paid', updated_at: now })
+      .eq('id', order.id).eq('payment_status', 'paid').eq('status', 'payment_review')
+      .select('id,order_number,customer_id,email,status,payment_status,total_kobo,paid_at').maybeSingle();
+    if (orderUpdateError) throw new HttpError(503, 'ORDER_APPROVAL_SAVE_FAILED', 'Paystack confirmed payment, but Vine could not release the order. Retry approval.');
+    if (changedOrder) approvedOrder = changedOrder;
+    else {
+      approvedOrder = await loadOrderForPayment(order.id);
+      if (approvedOrder.payment_status !== 'paid' || !['paid', 'processing', 'shipped', 'delivered'].includes(approvedOrder.status)) {
+        throw new HttpError(409, 'ORDER_APPROVAL_CONFLICT', 'The order changed during approval. Refresh the review queue and inspect its current status.');
+      }
+    }
+    await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'payment.review_order_approved', entityType: 'order', entityId: order.id, requestId: req.id, metadata: { requestId, paymentId: payment.id, provider: 'paystack', note: String(note || '').slice(0, 1000) } });
+  }
+
+  // Idempotent side effects are retried safely if a previous approval stopped midway.
+  const { error: ledgerError } = await operationsDb.rpc('record_vine_sale_once', {
+    p_order_id: order.id, p_order_number: order.order_number, p_amount_kobo: Number(order.total_kobo), p_paid_at: approvedOrder.paid_at || payment.paid_at || now
+  });
+  if (ledgerError) throw new HttpError(503, 'SALES_LEDGER_FAILED', 'The order was approved, but sales analytics needs reconciliation. Refresh and retry approval.');
+  await ensurePaidOrderDeliveryAssignment(approvedOrder);
+  await enqueueOrderNotice(approvedOrder, 'customer.order_paid');
+  const finalNote = [String(reviewRequest.staff_note || ''), String(note || '').trim(), 'Order approved after fresh Paystack verification; tracking may now be assigned.'].filter(Boolean).join(' — ').slice(0, 1000);
+  const { error: closeError } = await operationsDb.from('payment_review_requests').update({
+    status: 'verified_paid', staff_note: finalNote, reviewed_by: req.user.id, resolved_at: now, updated_at: now
+  }).eq('id', reviewRequest.id).eq('status', 'verified_pending_approval');
+  if (closeError) throw new HttpError(503, 'PAYMENT_REVIEW_CLOSE_FAILED', 'The order was approved, but the review request could not be closed. Refresh and retry to reconcile it.');
+  await addAudit({ actorId: req.user.id, actorType: 'admin', action: 'payment.review_request_closed_after_approval', entityType: 'payment_review_request', entityId: reviewRequest.id, requestId: req.id, metadata: { orderId: order.id } });
+  res.json({ data: { requestId, status: 'verified_paid', paymentStatus: 'paid', orderNumber: order.order_number, approved: true, note: 'Payment reverified and order approved. Delivery assignment and tracking are now enabled.' } });
 }));
 
 app.get('/api/v1/admin/payments', auth, paymentAdmin, asyncRoute(async (req, res) => {
