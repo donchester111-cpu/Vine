@@ -1,6 +1,6 @@
 /* Vine PWA: cache only the public app shell. API/auth/payment responses are network-only. */
 'use strict';
-const CACHE_NAME = 'vine-shell-v1';
+const CACHE_NAME = 'vine-shell-v2';
 const SHELL = ['./index.html', './manifest.webmanifest', './favicon.png', './icons/vine-192.png', './icons/vine-512.png', './icons/vine-maskable-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
