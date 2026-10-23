@@ -662,8 +662,10 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 .account-payment-help{grid-column:1/-1;margin-top:7px;padding:13px;border:1px solid #f0d6a8;border-radius:13px;background:#fffaf0}
 .account-payment-help strong{display:block;color:#69460a;font-size:14px;margin-bottom:5px}
 .account-payment-help p{margin:0 0 11px;color:#77664c;font-size:13px;line-height:1.5}
-.account-payment-check-btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:9px 13px;border:0;border-radius:10px;background:#087f45;color:#fff;font:inherit;font-size:13px;font-weight:800;cursor:pointer}
-.account-payment-check-btn:disabled{opacity:.6;cursor:wait}
+.account-payment-check-btn,.account-continue-payment-btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 14px;border:0;border-radius:10px;background:#087f45;color:#fff;font:inherit;font-size:13px;font-weight:800;cursor:pointer;text-align:center;text-decoration:none}
+.account-continue-payment-btn{width:100%;margin:0 0 9px;background:#087f45;box-shadow:0 3px 0 #056536}
+.account-payment-check-btn{background:#315f48}
+.account-payment-check-btn:disabled,.account-continue-payment-btn:disabled{opacity:.6;cursor:wait;box-shadow:none}
 .account-payment-help .account-payment-help-links{margin-top:9px}
 .vine-policy-doc a{color:#087f45;font-weight:700;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
 @media(max-width:560px){.account-payment-help-links a,.account-support-links a{flex:1 1 100%;justify-content:center}.account-payment-check-btn{width:100%}}
@@ -1646,12 +1648,30 @@ function renderAccountOrders(error){
     const orderNo=String(o.order_number||`Order ${String(o.id||'').slice(0,8)}`);
     const mailHref=`mailto:vinestore1official@gmail.com?subject=${encodeURIComponent(`Payment check for ${orderNo}`)}&body=${encodeURIComponent(`Hello Vine support, I need help checking payment for order ${orderNo}.`)}`;
     const whatsappHref=`https://wa.me/2348124422107?text=${encodeURIComponent(`Hello Vine, I need help checking payment for order ${orderNo}.`)}`;
-    const pendingHelp=paid?'':`<div class="account-payment-help"><strong>${String(o.payment_status||'').toLowerCase()==='review_required'||String(o.status||'').toLowerCase()==='payment_review'?'Payment under review':'Payment pending — your order is saved'}</strong><p>${String(o.payment_status||'').toLowerCase()==='review_required'||String(o.status||'').toLowerCase()==='payment_review'?'Vine is reviewing this payment. Please do not pay again while the check is in progress.':'If your bank debited you but Vine still shows this order as unpaid, request an instant provider-side check. If it cannot be confirmed automatically, Vine support will receive a review request. Please do not pay twice.'}</p><button type="button" class="account-payment-check-btn" data-payment-check-order="${safeText(o.id)}">Request instant payment check</button><div class="account-payment-help-links"><a href="${safeText(mailHref)}">✉ Email agent</a><a href="tel:+2348148316917">☎ Call agent</a><a href="${safeText(whatsappHref)}" target="_blank" rel="noopener noreferrer">◉ WhatsApp agent</a></div></div>`;
+    const paymentUnderReview=String(o.payment_status||'').toLowerCase()==='review_required'||String(o.status||'').toLowerCase()==='payment_review';
+    const canContinuePayment=!paid&&!paymentUnderReview&&!['cancelled','canceled','refunded','failed','expired'].includes(String(o.status||'').toLowerCase());
+    const pendingHelp=paid?'':`<div class="account-payment-help"><strong>${paymentUnderReview?'Payment under review':'Payment pending — your order is saved'}</strong><p>${paymentUnderReview?'Vine is reviewing this payment. Please do not pay again while the check is in progress.':'Continue to Paystack to complete payment for this saved order. If your bank already debited you, use the payment-check option instead and do not pay twice.'}</p>${canContinuePayment?`<button type="button" class="account-continue-payment-btn" data-continue-payment-order="${safeText(o.id)}">Continue payment →</button>`:''}<button type="button" class="account-payment-check-btn" data-payment-check-order="${safeText(o.id)}">Request instant payment check</button><div class="account-payment-help-links"><a href="${safeText(mailHref)}">✉ Email agent</a><a href="tel:+2348148316917">☎ Call agent</a><a href="${safeText(whatsappHref)}" target="_blank" rel="noopener noreferrer">◉ WhatsApp agent</a></div></div>`;
     return `<article class="account-order-card"><span class="account-order-icon">▤</span><div class="account-order-main"><div class="account-order-top"><div><strong>${safeText(orderNo)}</strong><small>${safeText(accountFormatDate(o.created_at))} · ${safeText(o.currency||"NGN")}</small></div><span class="account-order-total">${money(Number(o.total_kobo||0)/100)}</span></div><div class="account-order-badges">${accountStatus(o.status)} <span style="display:inline-block">${accountStatus(o.payment_status)}</span></div><div class="account-order-actions">${paid?`<button type="button" class="account-track-btn" data-track-order="${safeText(o.id)}"><span aria-hidden="true">⌁</span> Track this order <span aria-hidden="true">→</span></button>`:'<span class="account-order-pending-note">Tracking becomes available after verified payment.</span>'}</div>${pendingHelp}<div id="orderTracking-${safeText(o.id)}" class="vine-order-tracking" hidden></div></div></article>`;
   }).join("");
 }
 
 document.addEventListener("click",async event=>{
+  const continueButton=event.target.closest("[data-continue-payment-order]");
+  if(continueButton){
+    if(!window.VineAPI?.isSignedIn()){launchCustomerAuth("login");setAuthMessage("Sign in to continue payment for your Vine order.");return;}
+    const orderId=continueButton.dataset.continuePaymentOrder;if(!orderId)return;
+    const original=continueButton.textContent;continueButton.disabled=true;continueButton.textContent="Opening secure payment…";
+    try{
+      const result=await window.VineAPI.initializePayment(orderId);
+      if(result.method==="paystack"&&result.authorizationUrl){window.location.assign(result.authorizationUrl);return;}
+      if(String(result.status||result.paymentStatus||"").toLowerCase()==="paid"){
+        await refreshAccountOrders();accountMessage("Payment is already confirmed. Your order status has been refreshed.");showToast("Payment confirmed.");return;
+      }
+      throw new Error("Paystack could not start payment for this order. Please try again or request a payment check if your bank already debited you.");
+    }catch(e){accountMessage(e.message||"Unable to continue payment. Please retry or contact Vine support.",true);}
+    finally{continueButton.disabled=false;continueButton.textContent=original;}
+    return;
+  }
   const button=event.target.closest("[data-payment-check-order]");if(!button)return;
   if(!window.VineAPI?.isSignedIn()){launchCustomerAuth("login");setAuthMessage("Sign in to request a payment check for your Vine order.");return;}
   const orderId=button.dataset.paymentCheckOrder;if(!orderId)return;
