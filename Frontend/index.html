@@ -669,6 +669,25 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 .account-payment-help .account-payment-help-links{margin-top:9px}
 .vine-policy-doc a{color:#087f45;font-weight:700;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
 @media(max-width:560px){.account-payment-help-links a,.account-support-links a{flex:1 1 100%;justify-content:center}.account-payment-check-btn{width:100%}}
+
+/* Dedicated Orders destination: keep order history out of the long profile dashboard. */
+.account-orders-heading-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.account-orders-back{display:none;border:1px solid #dce9dd;border-radius:10px;background:#f5faf3;color:#176b3e;padding:9px 11px;font-size:12px;font-weight:800;white-space:nowrap}
+#accountDashboard.account-orders-focused .account-profile-hero,
+#accountDashboard.account-orders-focused .account-stat-grid,
+#accountDashboard.account-orders-focused .account-shortcuts,
+#accountDashboard.account-orders-focused #accountFeedback,
+#accountDashboard.account-orders-focused #accountProfilePanel,
+#accountDashboard.account-orders-focused #accountAddressesPanel,
+#accountDashboard.account-orders-focused #accountSavedPanel,
+#accountDashboard.account-orders-focused #accountReviewsPanel,
+#accountDashboard.account-orders-focused #accountQuestionsPanel,
+#accountDashboard.account-orders-focused .account-bottom-signout{display:none!important}
+#accountDashboard.account-orders-focused .account-content-grid{display:block;margin-top:14px}
+#accountDashboard.account-orders-focused #accountOrdersPanel{display:block!important;width:100%;grid-column:1/-1;grid-row:auto;min-height:55vh;padding:clamp(18px,3vw,30px);border-radius:20px}
+#accountDashboard.account-orders-focused .account-orders-back{display:inline-flex;align-items:center;justify-content:center}
+#accountOrdersPanel{scroll-margin-top:18px}
+@media(max-width:620px){.account-orders-heading-actions{gap:7px;align-items:flex-start;flex-direction:column-reverse}.account-orders-back{font-size:10px;padding:8px 9px}.account-orders-heading-actions #accountRefreshOrders{padding:4px 0}.account-card-heading{gap:10px}}
 </style>
 
 </head>
@@ -793,7 +812,7 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
         <section id="accountProfilePanel" class="account-content-card account-profile-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR DETAILS</span><h3>Profile information</h3><p>Keep your contact details up to date.</p></div><span class="account-card-symbol">◉</span></div><div class="account-photo-picker"><div class="account-photo-preview" id="accountPhotoPreview" aria-label="Profile picture preview">V</div><div class="account-photo-copy"><strong>Profile picture</strong><p>Choose a photo from your phone. Vine resizes it securely before upload.</p><div class="account-photo-actions"><input type="file" id="accountAvatarFile" accept="image/jpeg,image/png,image/webp" hidden><button class="account-photo-button" type="button" id="accountChooseAvatar">Choose photo</button><span class="account-photo-status" id="accountAvatarStatus" role="status" aria-live="polite">JPG, PNG or WebP · up to 8 MB</span></div></div></div><form id="accountProfileForm" class="account-form"><label>Full name<input id="accountFullName" name="fullName" autocomplete="name" maxlength="120" required></label><label>Email address<input id="accountEmail" type="email" disabled></label><label>Phone number<input id="accountPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="Add a phone number"></label><button class="account-primary-btn" id="accountSaveProfile" type="submit">Save profile</button></form>
           <section class="account-support-panel" aria-labelledby="accountSupportTitle"><h4 id="accountSupportTitle">Need help with your account or payment?</h4><p>Reach the Vine support agent. For payment issues, include your order number and never share your card PIN, password or one-time password.</p><div class="account-support-links"><a href="mailto:vinestore1official@gmail.com" aria-label="Email Vine support">✉ Email support</a><a href="tel:+2348148316917" aria-label="Call Vine support">☎ Call 0814 831 6917</a><a href="https://wa.me/2348124422107" target="_blank" rel="noopener noreferrer" aria-label="Chat with the Vine WhatsApp agent">◉ WhatsApp agent</a></div></section>
         </section>
-        <section id="accountOrdersPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">PURCHASE HISTORY</span><h3>Your orders</h3><p>Follow payment confirmation, packing, dispatch and delivery for each Vine order.</p></div><button type="button" class="storefront-text-btn" id="accountRefreshOrders">Refresh</button></div><div id="accountOrdersList" class="account-order-list"><div class="account-inline-loading">Loading order history…</div></div></section>
+        <section id="accountOrdersPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">PURCHASE HISTORY</span><h3>Your orders</h3><p>Track payments, packing, dispatch and delivery in one dedicated place.</p></div><div class="account-orders-heading-actions"><button type="button" class="account-orders-back" id="accountOrdersBack">← Account overview</button><button type="button" class="storefront-text-btn" id="accountRefreshOrders">Refresh</button></div></div><div id="accountOrdersList" class="account-order-list"><div class="account-inline-loading">Loading order history…</div></div></section>
         <section id="accountAddressesPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">DELIVERY DETAILS</span><h3>Saved addresses</h3><p>Reuse these details during checkout.</p></div><span class="account-card-symbol">⌖</span></div><div id="accountAddressesList" class="account-address-list"><div class="account-inline-loading">Loading saved addresses…</div></div><details class="account-add-address"><summary>＋ Add a new address</summary><form id="accountAddressForm" class="account-form address-form"><label>Recipient name<input id="addrRecipient" required maxlength="120" autocomplete="name"></label><label>Phone number<input id="addrPhone" required maxlength="30" inputmode="tel" autocomplete="tel"></label><label class="address-form-wide">Street address<input id="addrLine1" required maxlength="240" autocomplete="address-line1"></label><label class="address-form-wide">Apartment, hostel or extra address <span>(optional)</span><input id="addrLine2" maxlength="240" autocomplete="address-line2"></label><label>City / town<input id="addrCity" required maxlength="100" autocomplete="address-level2"></label><label>State / FCT<input id="addrState" required maxlength="100" autocomplete="address-level1"></label><label>Postal code <span>(optional)</span><input id="addrPostal" maxlength="20" autocomplete="postal-code"></label><label>Landmark <span>(optional)</span><input id="addrLandmark" maxlength="200"></label><label class="address-default-check"><input id="addrDefault" type="checkbox"> Set as my default address</label><button type="submit" class="account-primary-btn" id="accountSaveAddress">Save address</button></form></details></section>
         <section id="accountSavedPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR COLLECTION</span><h3>Saved finds</h3><p>Saved products linked to your signed-in Vine account.</p></div><button type="button" class="storefront-text-btn" onclick="navigateView('home')">Explore products</button></div><div id="accountSavedGrid" class="account-saved-grid"></div></section>
         <section id="accountReviewsPanel" class="account-content-card account-wide-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR FEEDBACK</span><h3>Your product reviews</h3><p>Reviews you have submitted for products purchased through Vine.</p></div></div><div id="accountReviewsList" class="account-history-list"><div class="account-inline-loading">Loading your reviews…</div></div></section>
@@ -1608,7 +1627,20 @@ function renderAccountAvatar(name,email,avatarUrl){
  if(url.startsWith("https://")){const image=`<img src="${safeText(url)}" alt="${safeText(name||"Vine customer")}'s profile picture" onerror="this.parentElement.textContent='${safeText(initials)}'">`;el.innerHTML=image;if(preview)preview.innerHTML=image;}
  else{el.textContent=initials;if(preview)preview.textContent=initials;}
 }
-function accountScrollTo(section){const ids={profile:"accountProfilePanel",orders:"accountOrdersPanel",addresses:"accountAddressesPanel",saved:"accountSavedPanel",reviews:"accountReviewsPanel",questions:"accountQuestionsPanel"};const el=$v(ids[section]||ids.profile);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});}
+function accountScrollTo(section){
+ const dashboard=$v("accountDashboard");
+ const ids={profile:"accountProfilePanel",orders:"accountOrdersPanel",addresses:"accountAddressesPanel",saved:"accountSavedPanel",reviews:"accountReviewsPanel",questions:"accountQuestionsPanel"};
+ const target=ids[section]||ids.profile;
+ // Orders opens as a dedicated account destination so a long order history does not crowd the profile dashboard.
+ if(section==="orders"){
+  dashboard.classList.add("account-orders-focused");
+  const panel=$v("accountOrdersPanel");
+  if(panel){panel.scrollIntoView({behavior:"smooth",block:"start"});}
+  return;
+ }
+ dashboard.classList.remove("account-orders-focused");
+ const el=$v(target);if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+}
 async function loadAccountDashboard(){
   const requestId=++accountRequestId;
   const signed=Boolean(window.VineAPI?.isSignedIn());setAccountGuest(signed);
@@ -1910,6 +1942,7 @@ $v("accountAvatarFile").addEventListener("change",uploadAccountAvatar);
 $v("accountAddressForm").addEventListener("submit",createAccountAddress);
 $v("accountAddressesList").addEventListener("click",accountAddressAction);
 $v("accountRefreshOrders").addEventListener("click",refreshAccountOrders);
+$v("accountOrdersBack").addEventListener("click",()=>{const dashboard=$v("accountDashboard");dashboard.classList.remove("account-orders-focused");$v("accountPageTitle").scrollIntoView({behavior:"smooth",block:"start"});});
 $v("accountOrdersList").addEventListener("click",event=>{const track=event.target.closest("[data-track-order]"),refresh=event.target.closest("[data-track-refresh]");if(track)loadOrderTracking(track.dataset.trackOrder);else if(refresh)loadOrderTracking(refresh.dataset.trackRefresh,true);});
 $v("accountSavedGrid").addEventListener("click",()=>{const count=saved.size;$v("accountSavedCount").textContent=String(count)});
 document.addEventListener('click',e=>{const review=e.target.closest('[data-open-review-product]'),question=e.target.closest('[data-open-question-product]');const slug=review?.dataset.openReviewProduct||question?.dataset.openQuestionProduct;if(slug){navigateView('home');const product=[...productCache.values()].find(p=>p.slug===slug);if(product)viewProduct(product.id);else window.VineAPI.productBySlug(slug).then(p=>{const mapped=mapVineProduct(p);productCache.set(String(mapped.id),mapped);viewProduct(mapped.id)}).catch(err=>showToast(err.message||'Product could not be opened.'));}});
