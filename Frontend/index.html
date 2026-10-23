@@ -707,6 +707,96 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 
 </style>
 
+
+<style id="vine-professional-account-menu">
+/* Account menu redesign: dashboard is a destination picker, never a page containing every feature. */
+#accountView .storefront-page-heading{align-items:center;margin-bottom:18px;gap:14px}
+#accountView .storefront-page-heading h1{font-size:clamp(25px,3vw,34px);letter-spacing:-1.15px;margin:6px 0;color:#173b29}
+#accountView .storefront-page-heading p{font-size:12px;line-height:1.55;margin:0;color:#748378;max-width:420px}
+#accountView .account-page-wrap{max-width:1040px}
+#accountView .account-profile-hero{display:flex;align-items:center;gap:15px;padding:18px 20px;margin-bottom:20px;border:1px solid #e1eae1;border-radius:19px;background:linear-gradient(115deg,#f7fcf6 0%,#fff 64%,#f5faf3 100%);box-shadow:0 8px 24px rgba(24,62,38,.045)}
+#accountView .account-avatar{width:58px;height:58px;flex:0 0 58px;border-radius:18px;border:2px solid white;box-shadow:0 0 0 1px #dceadd;background:#e0f1df;color:#087f45;font-size:21px;font-weight:850;display:grid;place-items:center;overflow:hidden}
+#accountView .account-avatar img{width:100%;height:100%;object-fit:cover}
+#accountView .account-profile-copy{min-width:0;flex:1}
+#accountView .account-profile-copy h2{font-size:clamp(17px,2.3vw,22px);letter-spacing:-.55px;color:#183b29;margin:3px 0 4px;overflow-wrap:anywhere}
+#accountView .account-profile-copy p{font-size:12px;color:#708075;margin:0 0 8px;overflow-wrap:anywhere}
+#accountView .account-profile-label{font-size:9px;letter-spacing:1.4px;font-weight:900;color:#13804a}
+#accountView .account-member-chip{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#eaf7ed;color:#147344;font-size:10px;font-weight:800}
+#accountView .account-member-chip>span{width:6px;height:6px;border-radius:50%;background:#0b9954}
+#accountView .account-quiet-btn{border:1px solid #e0e8e0;background:#fff;color:#4c6655;padding:9px 12px;border-radius:11px;font-size:11px;font-weight:800;white-space:nowrap}
+#accountView .account-home-heading{margin:0 0 12px;padding:0 2px}
+#accountView .account-home-heading h2{font-size:19px;letter-spacing:-.45px;margin:4px 0;color:#183b29}
+#accountView .account-home-heading p{font-size:11px;color:#7b887e;margin:0}
+#accountView .account-feature-grid{display:flex;flex-direction:column;gap:0;margin:0 0 14px;padding:5px 15px;border:1px solid #e1eae1;border-radius:18px;background:#fff;overflow:hidden;box-shadow:0 8px 26px rgba(24,62,38,.04)}
+#accountView .account-feature-card{position:relative;display:flex;align-items:center;gap:13px;width:100%;min-width:0;min-height:61px;height:auto;padding:10px 2px;border:0;border-bottom:1px solid #edf2ec;border-radius:0;background:transparent;color:#223c2c;text-align:left;box-shadow:none;transform:none;transition:background .15s ease}
+#accountView .account-feature-card:last-child{border-bottom:0}
+#accountView .account-feature-card:hover,#accountView .account-feature-card:focus-visible{background:#f6fbf6;box-shadow:none;transform:none;outline:0;border-radius:10px}
+#accountView .account-feature-icon{width:39px;height:39px;flex:0 0 39px;border-radius:12px;display:grid;place-items:center;background:#edf7ed;color:#087f45;font-size:20px;font-weight:850}
+#accountView .account-feature-orders{background:transparent;border-color:#edf2ec;color:#223c2c}
+#accountView .account-feature-orders .account-feature-icon{background:#e4f4e4;color:#087f45}
+#accountView .account-feature-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
+#accountView .account-feature-copy strong{font-size:13px;line-height:1.3;color:#193b29;font-weight:850}
+#accountView .account-feature-copy small{font-size:10px;line-height:1.35;color:#7b897e}
+#accountView .account-feature-copy em{font-size:10px;line-height:1.2;font-style:normal;font-weight:800;color:#13804a}
+#accountView .account-feature-orders .account-feature-copy strong,#accountView .account-feature-orders .account-feature-copy em{color:#193b29}
+#accountView .account-feature-orders .account-feature-copy small{color:#7b897e}
+#accountView .account-feature-arrow{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;border:1px solid #e7eee6;border-radius:9px;color:#789180;font-size:17px;line-height:1}
+#accountView .account-bottom-signout{display:none!important}
+/* Critical fix: hide every feature panel by default. They are mounted for the existing data/render logic only. */
+#accountView #accountDashboard:not(.account-section-focused) .account-section-toolbar{display:none!important}
+#accountView #accountDashboard:not(.account-section-focused) .account-content-grid{display:none!important}
+#accountView #accountDashboard:not(.account-section-focused) .account-content-grid>section{display:none!important}
+/* Inside a feature, remove the dashboard heading and show only one destination panel plus a clear return control. */
+#accountView.account-feature-open>.account-page-wrap>.storefront-page-heading{display:none!important}
+#accountView #accountDashboard.account-section-focused .account-profile-hero,
+#accountView #accountDashboard.account-section-focused .account-home-heading,
+#accountView #accountDashboard.account-section-focused .account-feature-grid,
+#accountView #accountDashboard.account-section-focused .account-bottom-signout{display:none!important}
+#accountView #accountDashboard.account-section-focused .account-section-toolbar{display:flex!important;align-items:center;gap:11px;padding:0 0 13px;margin:0 0 14px;border-bottom:1px solid #e5ece4}
+#accountView .account-section-back{display:inline-flex;align-items:center;justify-content:center;min-height:39px;padding:9px 12px;border:1px solid #dce8dc;border-radius:11px;background:#f5faf3;color:#176b3e;font-size:11px;font-weight:850;white-space:nowrap}
+#accountView .account-section-toolbar>span{font-size:12px;font-weight:850;color:#254c35}
+#accountView #accountDashboard.account-section-focused .account-content-grid{display:block!important;margin:0!important}
+#accountView #accountDashboard.account-section-focused .account-content-grid>section{display:none!important;box-sizing:border-box;width:100%;min-width:0;grid-column:1/-1;grid-row:auto;padding:clamp(15px,3vw,26px);border:1px solid #e2ebe1;border-radius:18px;background:#fff;box-shadow:0 8px 24px rgba(24,62,38,.04)}
+#accountView #accountDashboard.account-section-focused[data-account-section="profile"] #accountProfilePanel,
+#accountView #accountDashboard.account-section-focused[data-account-section="orders"] #accountOrdersPanel,
+#accountView #accountDashboard.account-section-focused[data-account-section="addresses"] #accountAddressesPanel,
+#accountView #accountDashboard.account-section-focused[data-account-section="saved"] #accountSavedPanel,
+#accountView #accountDashboard.account-section-focused[data-account-section="reviews"] #accountReviewsPanel,
+#accountView #accountDashboard.account-section-focused[data-account-section="questions"] #accountQuestionsPanel{display:block!important}
+#accountView #accountDashboard.account-section-focused .account-orders-back{display:none!important}
+#accountView .account-card-heading h3{font-size:clamp(17px,2.1vw,22px);letter-spacing:-.5px;color:#193b29}
+#accountView .account-card-heading p{font-size:12px;line-height:1.55}
+#accountView .account-content-grid .account-form{max-width:650px}
+#accountView .account-section-focused .account-order-list{display:grid;gap:12px}
+#accountView .account-section-focused .account-order-list>article{border-radius:15px}
+@media(min-width:800px){#accountView .account-profile-hero{padding:21px 24px}#accountView .account-feature-grid{max-width:850px;padding:7px 20px}#accountView .account-feature-card{min-height:65px}#accountView .account-feature-icon{width:42px;height:42px;flex-basis:42px}}
+@media(max-width:620px){
+ #accountView .storefront-page-heading{align-items:flex-start;margin-bottom:14px;gap:8px}
+ #accountView .storefront-page-heading h1{font-size:26px;letter-spacing:-.9px}
+ #accountView .storefront-page-heading p{font-size:11px;max-width:230px}
+ #accountView .storefront-page-heading>.storefront-outline-btn{padding:9px 10px;font-size:10px;white-space:nowrap}
+ #accountView .account-profile-hero{gap:11px;padding:13px 12px;margin-bottom:16px;border-radius:16px}
+ #accountView .account-avatar{width:48px;height:48px;flex-basis:48px;border-radius:15px;font-size:18px}
+ #accountView .account-profile-copy h2{font-size:16px}
+ #accountView .account-profile-copy p{font-size:10px;margin-bottom:6px}
+ #accountView .account-member-chip{font-size:9px;padding:4px 7px}
+ #accountView .account-quiet-btn{padding:8px 9px;font-size:10px}
+ #accountView .account-home-heading h2{font-size:18px}
+ #accountView .account-feature-grid{padding:4px 11px;border-radius:16px}
+ #accountView .account-feature-card{min-height:57px;padding:8px 1px;gap:10px}
+ #accountView .account-feature-icon{width:36px;height:36px;flex-basis:36px;border-radius:11px;font-size:19px}
+ #accountView .account-feature-copy strong{font-size:12px}
+ #accountView .account-feature-copy small{font-size:9px}
+ #accountView .account-feature-copy em{font-size:9px}
+ #accountView .account-feature-arrow{width:25px;height:25px;flex-basis:25px}
+ #accountView #accountDashboard.account-section-focused .account-content-grid>section{padding:14px 12px;border-radius:15px}
+ #accountView .account-section-toolbar{gap:8px}
+ #accountView .account-section-back{padding:8px 10px;min-height:36px;font-size:10px}
+ #accountView .account-section-toolbar>span{font-size:11px}
+}
+@media(max-width:370px){#accountView .account-profile-hero{gap:8px;padding:11px 9px}#accountView .account-quiet-btn{padding:7px 8px;font-size:9px}#accountView .account-feature-copy small{font-size:8.5px}}
+</style>
+
 </head>
 <body>
 <div class="topline vine-trustbar">
@@ -818,11 +908,11 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
 
 <section id="accountView" class="storefront-view" hidden aria-labelledby="accountPageTitle">
   <div class="storefront-page-wrap account-page-wrap">
-    <div class="storefront-page-heading"><div><span class="vine-eyebrow">YOUR VINE SPACE</span><h1 id="accountPageTitle">Your account</h1><p>Manage your profile, addresses, orders, saved products, reviews and product questions.</p></div><button type="button" class="storefront-outline-btn" onclick="navigateView('home')">← Back to shop</button></div>
+    <div class="storefront-page-heading"><div><span class="vine-eyebrow">YOUR VINE SPACE</span><h1 id="accountPageTitle">Your account</h1><p>Choose a destination below. Each area opens separately.</p></div><button type="button" class="storefront-outline-btn" onclick="navigateView('home')">← Back to shop</button></div>
     <section id="accountGuest" class="account-guest-card"><div class="account-guest-art" aria-hidden="true">V</div><div><span class="vine-eyebrow">WELCOME TO VINE</span><h2>Your shopping, all in one place.</h2><p>Sign in to view your profile, saved addresses and order history across Vine's connected services.</p><div class="account-guest-actions"><button class="account-primary-btn" id="accountGuestSignIn" type="button">Sign in</button><button class="storefront-outline-btn" id="accountGuestCreate" type="button">Create account</button></div><p class="account-auth-note">Saved products sync to your account after you sign in. Your order history, reviews and product questions are available here too.</p></div></section>
     <div id="accountDashboard" hidden>
       <section class="account-profile-hero"><div class="account-avatar" id="accountAvatar">V</div><div class="account-profile-copy"><span class="account-profile-label">VINE CUSTOMER</span><h2 id="accountDisplayName">Welcome back</h2><p id="accountDisplayEmail">Loading your account…</p><span class="account-member-chip"><span></span> Account connected</span></div><button type="button" id="accountSignOutTop" class="account-quiet-btn">Sign out</button></section>
-      <div class="account-home-heading"><div><span class="account-card-kicker">YOUR PERSONAL SPACE</span><h2>What would you like to manage?</h2><p>Choose a section. Each feature opens on its own screen.</p></div></div>
+      <div class="account-home-heading"><div><span class="account-card-kicker">ACCOUNT MENU</span><h2>Where would you like to go?</h2><p>Choose a page to open it directly.</p></div></div>
       <nav class="account-feature-grid" aria-label="Account features">
         <button type="button" class="account-feature-card account-feature-orders" data-account-target="orders"><span class="account-feature-icon">▤</span><span class="account-feature-copy"><strong>My orders</strong><small>Payments, tracking and delivery</small><em id="accountOrderCount">— orders</em></span><span class="account-feature-arrow">→</span></button>
         <button type="button" class="account-feature-card" data-account-target="profile"><span class="account-feature-icon">◉</span><span class="account-feature-copy"><strong>Profile information</strong><small>Name, phone and profile photo</small><em>Manage details</em></span><span class="account-feature-arrow">→</span></button>
@@ -832,7 +922,7 @@ button.account-stat-card:hover{border-color:#a6d7b5;background:#fafffb}
         <button type="button" class="account-feature-card" data-account-target="questions"><span class="account-feature-icon">?</span><span class="account-feature-copy"><strong>Product questions</strong><small>Questions and seller answers</small><em>View questions</em></span><span class="account-feature-arrow">→</span></button>
       </nav>
       <div id="accountFeedback" class="account-feedback" role="status" hidden></div>
-      <div class="account-section-toolbar"><button type="button" id="accountSectionBack" class="account-section-back">← All account features</button><span id="accountSectionLabel">Account section</span></div>
+      <div class="account-section-toolbar"><button type="button" id="accountSectionBack" class="account-section-back">← Account menu</button><span id="accountSectionLabel">Account section</span></div>
       <div class="account-content-grid">
         <section id="accountProfilePanel" class="account-content-card account-profile-panel"><div class="account-card-heading"><div><span class="account-card-kicker">YOUR DETAILS</span><h3>Profile information</h3><p>Keep your contact details up to date.</p></div><span class="account-card-symbol">◉</span></div><div class="account-photo-picker"><div class="account-photo-preview" id="accountPhotoPreview" aria-label="Profile picture preview">V</div><div class="account-photo-copy"><strong>Profile picture</strong><p>Choose a photo from your phone. Vine resizes it securely before upload.</p><div class="account-photo-actions"><input type="file" id="accountAvatarFile" accept="image/jpeg,image/png,image/webp" hidden><button class="account-photo-button" type="button" id="accountChooseAvatar">Choose photo</button><span class="account-photo-status" id="accountAvatarStatus" role="status" aria-live="polite">JPG, PNG or WebP · up to 8 MB</span></div></div></div><form id="accountProfileForm" class="account-form"><label>Full name<input id="accountFullName" name="fullName" autocomplete="name" maxlength="120" required></label><label>Email address<input id="accountEmail" type="email" disabled></label><label>Phone number<input id="accountPhone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30" placeholder="Add a phone number"></label><button class="account-primary-btn" id="accountSaveProfile" type="submit">Save profile</button></form>
           <section class="account-support-panel" aria-labelledby="accountSupportTitle"><h4 id="accountSupportTitle">Need help with your account or payment?</h4><p>Reach the Vine support agent. For payment issues, include your order number and never share your card PIN, password or one-time password.</p><div class="account-support-links"><a href="mailto:vinestore1official@gmail.com" aria-label="Email Vine support">✉ Email support</a><a href="tel:+2348148316917" aria-label="Call Vine support">☎ Call 0814 831 6917</a><a href="https://wa.me/2348124422107" target="_blank" rel="noopener noreferrer" aria-label="Chat with the Vine WhatsApp agent">◉ WhatsApp agent</a></div></section>
@@ -1644,7 +1734,18 @@ function accountMessage(message,isError=false){const el=$v("accountFeedback");if
 function accountFormatDate(value){if(!value)return "Date unavailable";const d=new Date(value);return Number.isNaN(d.getTime())?"Date unavailable":new Intl.DateTimeFormat("en-NG",{day:"numeric",month:"short",year:"numeric"}).format(d);}
 function accountStatus(value){const s=String(value||"unknown").toLowerCase();const css=/paid|delivered/.test(s)?s:/pending|review|awaiting/.test(s)?s:/cancelled|failed|refund/.test(s)?s:"";return `<span class="account-status ${safeText(css)}">${safeText(s.replace(/_/g," "))}</span>`;}
 function accountInitials(name,email){const bits=String(name||email||"Vine customer").trim().split(/[\s@._-]+/).filter(Boolean);return bits.slice(0,2).map(s=>s[0]).join("").toUpperCase()||"V";}
-function setAccountGuest(signed){$v("accountGuest").hidden=!!signed;$v("accountDashboard").hidden=!signed;}
+function setAccountGuest(signed){
+  $v("accountGuest").hidden=!!signed;
+  $v("accountDashboard").hidden=!signed;
+  if(!signed){
+    const dashboard=$v("accountDashboard"),view=$v("accountView");
+    dashboard.classList.remove("account-section-focused","account-orders-focused");
+    delete dashboard.dataset.accountSection;
+    view?.classList.remove("account-feature-open");
+    $v("accountPageTitle").textContent="Your account";
+    $v("accountPageTitle").nextElementSibling.textContent="Choose a destination below. Each area opens separately.";
+  }
+}
 function launchCustomerAuth(mode){authMode=mode||"login";setAuthMessage("");setupAuthView();showModal("authBackdrop");}
 function renderAccountAvatar(name,email,avatarUrl){
  const el=$v("accountAvatar"),preview=$v("accountPhotoPreview");if(!el)return;
@@ -1653,16 +1754,18 @@ function renderAccountAvatar(name,email,avatarUrl){
  else{el.textContent=initials;if(preview)preview.textContent=initials;}
 }
 function accountScrollTo(section){
- const dashboard=$v("accountDashboard");
+ const dashboard=$v("accountDashboard"),view=$v("accountView");
  const ids={profile:"accountProfilePanel",orders:"accountOrdersPanel",addresses:"accountAddressesPanel",saved:"accountSavedPanel",reviews:"accountReviewsPanel",questions:"accountQuestionsPanel"};
  const labels={profile:"Profile information",orders:"My orders",addresses:"Delivery addresses",saved:"Saved finds",reviews:"My reviews",questions:"Product questions"};
  if(!ids[section])section="profile";
- dashboard.dataset.accountSection=section;
+ dashboard.classList.remove("account-orders-focused");
  dashboard.classList.add("account-section-focused");
+ dashboard.dataset.accountSection=section;
+ view?.classList.add("account-feature-open");
  $v("accountSectionLabel").textContent=labels[section];
- $v("accountPageTitle").textContent=labels[section];
- $v("accountPageTitle").nextElementSibling.textContent="Manage this feature in its own dedicated section.";
- window.scrollTo({top:0,behavior:"smooth"});
+ $v("accountPageTitle").textContent="Your account";
+ $v("accountPageTitle").nextElementSibling.textContent="Choose a destination below. Each area opens separately.";
+ window.scrollTo({top:0,behavior:"instant" in window?"instant":"auto"});
 }
 async function loadAccountDashboard(){
   const requestId=++accountRequestId;
@@ -1965,7 +2068,7 @@ $v("accountAvatarFile").addEventListener("change",uploadAccountAvatar);
 $v("accountAddressForm").addEventListener("submit",createAccountAddress);
 $v("accountAddressesList").addEventListener("click",accountAddressAction);
 $v("accountRefreshOrders").addEventListener("click",refreshAccountOrders);
-function returnToAccountHome(){const dashboard=$v("accountDashboard");dashboard.classList.remove("account-section-focused");delete dashboard.dataset.accountSection;$v("accountPageTitle").textContent="Your account";$v("accountPageTitle").nextElementSibling.textContent="Manage your profile, addresses, orders, saved products, reviews and product questions.";window.scrollTo({top:0,behavior:"smooth"});}
+function returnToAccountHome(){const dashboard=$v("accountDashboard"),view=$v("accountView");dashboard.classList.remove("account-section-focused","account-orders-focused");delete dashboard.dataset.accountSection;view?.classList.remove("account-feature-open");$v("accountPageTitle").textContent="Your account";$v("accountPageTitle").nextElementSibling.textContent="Choose a destination below. Each area opens separately.";window.scrollTo({top:0,behavior:"auto"});}
 $v("accountOrdersBack").addEventListener("click",returnToAccountHome);
 $v("accountSectionBack").addEventListener("click",returnToAccountHome);
 $v("accountOrdersList").addEventListener("click",event=>{const track=event.target.closest("[data-track-order]"),refresh=event.target.closest("[data-track-refresh]");if(track)loadOrderTracking(track.dataset.trackOrder);else if(refresh)loadOrderTracking(refresh.dataset.trackRefresh,true);});
