@@ -625,6 +625,114 @@ const productFieldsSchema = z.object({
 const productCreateSchema = productFieldsSchema.refine(v => v.compareAtPriceNgn == null || v.compareAtPriceNgn >= v.priceNgn, { path: ['compareAtPriceNgn'], message: 'Compare-at price must not be lower than the selling price.' });
 const productPatchSchema = productFieldsSchema.partial().refine(v => Object.keys(v).length > 0, 'Provide at least one field.');
 
+// AI-assisted product draft generation stays server-side. The proxy URL is never sent to Vineger.
+const productVisionProxy = String(process.env.STUDENTNIJA_AI_PROXY_URL || 'https://studentnija-proxy-v2.donchester111.workers.dev').trim().replace(/\/$/, '');
+const aiProductDraftRequestSchema = z.object({
+  imageUrl: httpsUrlSchema,
+  fileName: z.string().trim().max(240).optional().default('')
+});
+
+function parseProductDraftJson(value) {
+  const raw = String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(raw); } catch {}
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(raw.slice(start, end + 1)); } catch {}
+  }
+  return null;
+}
+
+function cleanDraftText(value, maxLength) {
+  return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, maxLength) : '';
+}
+
+app.post('/api/v1/admin/products/ai-draft', auth, catalogAdmin, asyncRoute(async (req, res) => {
+  const input = aiProductDraftRequestSchema.parse(req.body);
+  let imageUrl;
+  try { imageUrl = new URL(input.imageUrl); } catch { throw new HttpError(400, 'PRODUCT_IMAGE_URL_INVALID', 'Choose a valid product photo.'); }
+  let productsOrigin = '';
+  try { productsOrigin = new URL(process.env.PRODUCTS_SUPABASE_URL).origin; } catch {}
+  const expectedPath = `/storage/v1/object/public/${productImageBucket}/products/`;
+  if (!productsOrigin || imageUrl.origin !== productsOrigin || !imageUrl.pathname.startsWith(expectedPath) || !/^products\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/i.test(imageUrl.pathname.slice(expectedPath.length - 'products/'.length))) {
+    // Only analyse images that were uploaded to Vine's own product-image storage.
+    throw new HttpError(400, 'PRODUCT_IMAGE_URL_INVALID', 'Upload the product photo to Vine before preparing its details.');
+  }
+
+  let imageResponse;
+  try {
+    imageResponse = await fetch(imageUrl.toString(), { signal: AbortSignal.timeout(15000), headers: { Accept: 'image/jpeg,image/png,image/webp' } });
+  } catch {
+    throw new HttpError(503, 'PRODUCT_IMAGE_FETCH_FAILED', 'The product photo could not be opened. Try uploading it again.');
+  }
+  if (!imageResponse.ok) throw new HttpError(400, 'PRODUCT_IMAGE_FETCH_FAILED', 'The product photo could not be opened. Try uploading it again.');
+  const mimeType = String(imageResponse.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new HttpError(415, 'PRODUCT_IMAGE_TYPE_UNSUPPORTED', 'Choose a JPG, PNG or WebP product photo.');
+  const imageBytes = Buffer.from(await imageResponse.arrayBuffer());
+  if (!imageBytes.length || imageBytes.length > 5 * 1024 * 1024) throw new HttpError(413, 'PRODUCT_IMAGE_SIZE_INVALID', 'The product photo must be 5 MB or smaller after optimisation.');
+
+  const { data: categoryRows, error: categoryError } = await productsDb.from('categories')
+    .select('id,name,slug').eq('is_active', true).order('sort_order').order('name');
+  if (categoryError) throw new HttpError(503, 'CATEGORIES_UNAVAILABLE', 'Product categories could not be loaded.');
+  if (!categoryRows?.length) throw new HttpError(503, 'CATEGORIES_UNAVAILABLE', 'Add product categories before preparing product details.');
+
+  const categoryList = categoryRows.map(category => ({ name: category.name, slug: category.slug }));
+  const system = [
+    'You create accurate, distinctive product listings for Vine, a Nigerian online store.',
+    'Analyse the attached product image. Write natural, polished Nigerian-market English; avoid forced slang, exaggerated claims, generic filler and unverified specifications.',
+    'Do not invent brand names, model numbers, materials, dimensions, performance claims, compatibility, certifications, what is included, or product origin. Only include characteristics that are clearly visible or strongly supported by the image.',
+    'Return ONLY one valid JSON object with keys: name, description, categorySlug, tag, specifications.',
+    'name must be concise, distinctive, searchable and suitable for a product title. description must be useful sales copy focused on visible product traits and likely everyday use; never mention AI or image analysis.',
+    'categorySlug must exactly match one supplied category slug. If no category is a reasonable match, return null.',
+    'tag must be null unless a real product attribute merits a short label; never claim bestseller, discount, scarcity or popularity based on the image.',
+    'specifications must be an array of at most 8 objects with string keys name and value. Only include useful, visually supportable attributes; return [] if none are safe to state.',
+    'Never include price, stock quantity, SKU, delivery promises, or a fake brand. These are handled by Vine staff.',
+    `Existing active Vine categories (choose only from this list): ${JSON.stringify(categoryList)}`
+  ].join('\n');
+  const imageDataUrl = `data:${mimeType};base64,${imageBytes.toString('base64')}`;
+  let proxyResponse;
+  try {
+    proxyResponse = await fetch(`${productVisionProxy}/vision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      signal: AbortSignal.timeout(90000),
+      body: JSON.stringify({
+        system,
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: `Prepare a product listing for this file: ${cleanDraftText(input.fileName, 160) || 'product photo'}. Follow the exact JSON output contract.` },
+          { type: 'image_url', image_url: { url: imageDataUrl } }
+        ] }],
+        temperature: 0.25,
+        max_tokens: 1800
+      })
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, action: 'product.ai-draft.proxy-failed', reason: error?.name || 'network_error' }));
+    throw new HttpError(503, 'PRODUCT_DETAILS_UNAVAILABLE', 'Product details could not be prepared right now. Try again shortly.');
+  }
+  let proxyBody = null;
+  try { proxyBody = await proxyResponse.json(); } catch {}
+  if (!proxyResponse.ok || !proxyBody?.success || typeof proxyBody.text !== 'string') {
+    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, action: 'product.ai-draft.proxy-response-failed', status: proxyResponse.status, error: cleanDraftText(proxyBody?.error, 120) }));
+    throw new HttpError(503, 'PRODUCT_DETAILS_UNAVAILABLE', 'Product details could not be prepared right now. Try again shortly.');
+  }
+  // The proxy may fall back to a text-only model after vision providers fail. Never trust its answer as image analysis.
+  if (String(proxyBody.provider || '').toLowerCase() === 'groq') {
+    throw new HttpError(503, 'PRODUCT_VISION_UNAVAILABLE', 'The image could not be analysed right now. Try again shortly.');
+  }
+  const parsed = parseProductDraftJson(proxyBody.text);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(502, 'PRODUCT_DETAILS_INVALID', 'Product details were not returned in a usable format. Try again.');
+  const categoryMatch = categoryRows.find(category => category.slug === parsed.categorySlug);
+  const name = cleanDraftText(parsed.name, 180);
+  const description = cleanDraftText(parsed.description, 10000);
+  const tag = parsed.tag == null ? '' : cleanDraftText(parsed.tag, 40);
+  const specifications = Array.isArray(parsed.specifications) ? parsed.specifications.slice(0, 8).map(item => ({
+    name: cleanDraftText(item?.name, 80), value: cleanDraftText(item?.value, 240)
+  })).filter(item => item.name && item.value) : [];
+  if (name.length < 3 || description.length < 20) throw new HttpError(502, 'PRODUCT_DETAILS_INCOMPLETE', 'The product details were incomplete. Try preparing this photo again.');
+  res.json({ data: { name, description, categoryId: categoryMatch?.id || null, categorySlug: categoryMatch?.slug || null, tag: tag || null, specifications, imageUrl: input.imageUrl } });
+}));
+
 function productPatchRow(input) {
   const row = {};
   const map = { categoryId: 'category_id', sku: 'sku', slug: 'slug', name: 'name', description: 'description', imageUrl: 'image_url', galleryUrls: 'gallery_urls', tag: 'tag', status: 'status' };
