@@ -707,17 +707,46 @@ app.post('/api/v1/admin/products/ai-draft', auth, catalogAdmin, asyncRoute(async
       })
     });
   } catch (error) {
-    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, action: 'product.ai-draft.proxy-failed', reason: error?.name || 'network_error' }));
+    // Keep diagnostic details server-side; never expose provider/network errors to storefront clients.
+    console.error(JSON.stringify({
+      level: 'warn',
+      service: process.env.SERVICE_NAME || 'vine-store-api',
+      action: 'product.ai-draft.proxy-failed',
+      reason: error?.name || 'UnknownError',
+      message: String(error?.message || 'No error message').slice(0, 300),
+      cause: String(error?.cause?.message || '').slice(0, 300),
+      code: error?.cause?.code || error?.code || null,
+      proxyHost: (() => { try { return new URL(productVisionProxy).host; } catch { return 'invalid_proxy_url'; } })()
+    }));
     throw new HttpError(503, 'PRODUCT_DETAILS_UNAVAILABLE', 'Product details could not be prepared right now. Try again shortly.');
   }
   let proxyBody = null;
   try { proxyBody = await proxyResponse.json(); } catch {}
   if (!proxyResponse.ok || !proxyBody?.success || typeof proxyBody.text !== 'string') {
-    console.error(JSON.stringify({ level: 'warn', service: process.env.SERVICE_NAME, action: 'product.ai-draft.proxy-response-failed', status: proxyResponse.status, error: cleanDraftText(proxyBody?.error, 120) }));
+    console.error(JSON.stringify({
+      level: 'warn',
+      service: process.env.SERVICE_NAME || 'vine-store-api',
+      action: 'product.ai-draft.proxy-response-failed',
+      status: proxyResponse.status,
+      error: cleanDraftText(proxyBody?.error, 120),
+      provider: cleanDraftText(proxyBody?.provider, 60),
+      model: cleanDraftText(proxyBody?.model, 100),
+      fallbackUsed: proxyBody?.fallbackUsed ?? null,
+      fallbackAttempts: Number.isFinite(proxyBody?.fallbackAttempts) ? proxyBody.fallbackAttempts : null
+    }));
     throw new HttpError(503, 'PRODUCT_DETAILS_UNAVAILABLE', 'Product details could not be prepared right now. Try again shortly.');
   }
   // The proxy may fall back to a text-only model after vision providers fail. Never trust its answer as image analysis.
   if (String(proxyBody.provider || '').toLowerCase() === 'groq') {
+    console.error(JSON.stringify({
+      level: 'warn',
+      service: process.env.SERVICE_NAME || 'vine-store-api',
+      action: 'product.ai-draft.text-only-fallback-rejected',
+      provider: cleanDraftText(proxyBody.provider, 60),
+      model: cleanDraftText(proxyBody.model, 100),
+      fallbackUsed: proxyBody?.fallbackUsed ?? null,
+      fallbackAttempts: Number.isFinite(proxyBody?.fallbackAttempts) ? proxyBody.fallbackAttempts : null
+    }));
     throw new HttpError(503, 'PRODUCT_VISION_UNAVAILABLE', 'The image could not be analysed right now. Try again shortly.');
   }
   const parsed = parseProductDraftJson(proxyBody.text);
