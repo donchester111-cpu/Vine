@@ -692,11 +692,14 @@ app.post('/api/v1/admin/products/ai-draft', auth, catalogAdmin, asyncRoute(async
   const imageDataUrl = `data:${mimeType};base64,${imageBytes.toString('base64')}`;
   let proxyResponse;
   try {
-    proxyResponse = await fetch(`${productVisionProxy}/vision`, {
+    // Match the working StudentNija frontend: use the universal /ai route
+    // and explicitly select vision mode instead of calling /vision directly.
+    proxyResponse = await fetch(`${productVisionProxy}/ai`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(90000),
       body: JSON.stringify({
+        mode: 'vision',
         system,
         messages: [{ role: 'user', content: [
           { type: 'text', text: `Prepare a product listing for this file: ${cleanDraftText(input.fileName, 160) || 'product photo'}. Follow the exact JSON output contract.` },
